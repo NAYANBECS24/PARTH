@@ -20,13 +20,18 @@ keeps observations, limitations, job stages, findings, blindspots and exports in
   missing DEX, extraction budgets, disabled AI, unavailable guarded-path analysis and
   unavailable dynamic runtime observation.
 - React analyst workspace: intake wizard, persisted progress timeline, case tabs,
-  evidence triage, indicators, bounded graph fallback, reports and health.
+  evidence triage, APK/indicator libraries, comparison, bounded graph fallback,
+  reports, persisted settings, audit history and health.
+- First-run local administrator bootstrap, salted PBKDF2 password storage, expiring
+  bearer sessions, protected API/report downloads and auditable analyst actions.
+- Terminal-job retry creates a new immutable job/stage history instead of rewriting
+  the previous run.
 - JSON report, simple readable PDF, ZIP evidence capsule and independent hash verifier.
 
 ## Deliberately unavailable in this MVP
 
 - APK execution, emulator/MobSF/Frida lab, general DEX control-flow/taint analysis,
-  SMT witness proof, authenticated multi-user access, live threat intelligence and
+  SMT witness proof, multi-user administration/RBAC workflows, live threat intelligence and
   NVIDIA TRI-PROOF requests. The UI/API marks these as `unknown`, `unsupported`, or
   `not configured`; it does not manufacture a result.
 
@@ -43,6 +48,9 @@ the Python path used on this machine; override it when yours differs.
 
 Open `http://127.0.0.1:5173`. The API is at `http://127.0.0.1:8000`, with its health
 check at `http://127.0.0.1:8000/health`.
+
+On first launch, create the local administrator with a username and a password of at
+least 12 characters. All evidence API routes and report downloads require that session.
 
 The script checks ports immediately before launch and stops only the API/worker processes
 it created whenever Vite exits. It will report the owning PID if a selected port is busy.
@@ -71,6 +79,12 @@ Upload `fixtures/controlled_static_fixture.apk`, wait for the worker, then inspe
 exported-component observation, static string IoC, native/runtime/path blindspots, and
 download / verify the capsule.
 
+Capsules can also be verified without the web application:
+
+```powershell
+C:\Users\nayan\AppData\Local\Programs\Python\Python312\python.exe scripts/verify_capsule.py path\to\capsule.zip
+```
+
 ## Tests and checks
 
 ```powershell
@@ -81,6 +95,8 @@ npm run typecheck
 npm run test
 npm run build
 ```
+
+The same backend and frontend checks run in `.github/workflows/ci.yml`.
 
 ## Evidence model and limitations
 

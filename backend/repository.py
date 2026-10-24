@@ -70,6 +70,25 @@ def create_case_and_job(
     return case_id, job_id, bool(sample_exists)
 
 
+def create_retry_job(case_id: str) -> str:
+    job_id = identifier("job")
+    created_at = utcnow()
+    with transaction() as connection:
+        case = connection.execute("SELECT sample_sha256 FROM cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            raise ValueError("Case not found")
+        connection.execute(
+            "INSERT INTO jobs (id, case_id, sample_sha256, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+            (job_id, case_id, case["sample_sha256"], created_at, created_at),
+        )
+        connection.executemany(
+            "INSERT INTO job_stages (job_id, stage_key, position, status) VALUES (?, ?, ?, 'pending')",
+            ((job_id, stage, position) for position, stage in enumerate(STAGES, 1)),
+        )
+        connection.execute("UPDATE cases SET status = 'queued', updated_at = ? WHERE id = ?", (created_at, case_id))
+    return job_id
+
+
 def log_event(job_id: str, level: str, message: str, payload: dict[str, Any] | None = None) -> None:
     with transaction() as connection:
         connection.execute(

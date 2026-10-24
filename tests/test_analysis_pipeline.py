@@ -87,6 +87,25 @@ except HTTPException as error:
     assert result == {"status": 422, "code": "invalid_apk"}
 
 
+def test_capsule_verifier_rejects_tampered_content(tmp_path: Path) -> None:
+    result = run_isolated(
+        """
+import json, zipfile
+from backend.config import settings
+from backend.reports import verify_capsule
+
+capsule = settings.capsule_dir / 'tampered.zip'
+with zipfile.ZipFile(capsule, 'w') as archive:
+    archive.writestr('report.json', b'tampered')
+    archive.writestr('manifest.json', json.dumps({'files': [{'path': 'report.json', 'sha256': '0' * 64}]}))
+result = verify_capsule(capsule)
+print(json.dumps({'valid': result['valid'], 'failure_path': result['failures'][0]['path']}))
+""",
+        tmp_path,
+    )
+    assert result == {"valid": False, "failure_path": "report.json"}
+
+
 def test_api_intake_worker_and_report_verification(tmp_path: Path) -> None:
     result = run_isolated(
         """
@@ -101,16 +120,23 @@ with zipfile.ZipFile(archive, 'w') as apk:
     apk.writestr('classes.dex', b'dex\\n035\\x00https://api.fixture.test')
 
 with TestClient(app) as client:
-    response = client.post('/api/cases/intake', files={'file': ('api-fixture.apk', archive.getvalue(), 'application/vnd.android.package-archive')}, data={'case_name': 'API fixture', 'profile': 'standard', 'nvidia_reasoning': 'false', 'isolated_dynamic_lab': 'false'})
+    unauthenticated_status = client.get('/api/cases').status_code
+    bootstrap = client.post('/api/auth/bootstrap', json={'username': 'analyst', 'password': 'controlled-passphrase'}).json()
+    headers = {'Authorization': f"Bearer {bootstrap['token']}"}
+    response = client.post('/api/cases/intake', headers=headers, files={'file': ('api-fixture.apk', archive.getvalue(), 'application/vnd.android.package-archive')}, data={'case_name': 'API fixture', 'profile': 'standard', 'nvidia_reasoning': 'false', 'isolated_dynamic_lab': 'false'})
     response.raise_for_status()
     created = response.json()
     run_analysis(created['job_id'])
-    job = client.get(f"/api/jobs/{created['job_id']}").json()
-    case = client.get(f"/api/cases/{created['case_id']}").json()
+    job = client.get(f"/api/jobs/{created['job_id']}", headers=headers).json()
+    case = client.get(f"/api/cases/{created['case_id']}", headers=headers).json()
     report_id = case['reports'][0]['id']
-    verification = client.post(f'/api/reports/{report_id}/verify').json()
-    print(json.dumps({'job': job['job']['status'], 'report_count': len(case['reports']), 'verified': verification['valid'], 'stage_count': len(job['stages'])}))
+    verification = client.post(f'/api/reports/{report_id}/verify', headers=headers).json()
+    samples = client.get('/api/samples', headers=headers).json()
+    indicators = client.get('/api/indicators', headers=headers).json()
+    setting = client.patch('/api/settings', headers=headers, json={'default_profile': 'advanced'}).json()
+    retry = client.post(f"/api/jobs/{created['job_id']}/retry", headers=headers).json()
+    print(json.dumps({'unauthenticated': unauthenticated_status, 'job': job['job']['status'], 'report_count': len(case['reports']), 'verified': verification['valid'], 'stage_count': len(job['stages']), 'samples': samples['total'], 'indicators': indicators['total'], 'default_profile': setting['values']['default_profile'], 'retry_status': retry['status']}))
 """,
         tmp_path,
     )
-    assert result == {"job": "partial", "report_count": 1, "verified": True, "stage_count": 9}
+    assert result == {"unauthenticated": 401, "job": "partial", "report_count": 1, "verified": True, "stage_count": 9, "samples": 1, "indicators": 2, "default_profile": "advanced", "retry_status": "queued"}

@@ -8,16 +8,17 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.config import settings
+from backend.auth import audit, bearer_token, bootstrap_admin, bootstrap_required, login, revoke_session, user_for_token
 from backend.database import get_connection, initialise_database, transaction, utcnow
 from backend.intake import store_upload
 from backend.reports import verify_capsule
-from backend.repository import create_case_and_job, identifier, json_value, request_cancel
+from backend.repository import create_case_and_job, create_retry_job, identifier, json_value, request_cancel
 
 
 def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -57,7 +58,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="SHADOWPATH Ω — NEXUS API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="SHADOWPATH Ω — NEXUS API", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),
@@ -67,10 +68,69 @@ app.add_middleware(
 )
 
 
+PUBLIC_API_PATHS = {"/api/auth/status", "/api/auth/bootstrap", "/api/auth/login"}
+
+
+@app.middleware("http")
+async def authenticate_api(request: Request, call_next):  # type: ignore[no-untyped-def]
+    path = request.url.path
+    if request.method == "OPTIONS" or path == "/health" or path in PUBLIC_API_PATHS or not path.startswith("/api/"):
+        return await call_next(request)
+    token = bearer_token(request.headers.get("Authorization"))
+    user = user_for_token(token)
+    if not user:
+        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+    request.state.user = user
+    request.state.session_token = token
+    return await call_next(request)
+
+
 class FindingReview(BaseModel):
     decision: Literal["reviewed", "needs_further_testing", "false_positive"]
     note: str = Field(default="", max_length=4000)
     analyst: str = Field(default="local-analyst", max_length=120)
+
+
+class Credentials(BaseModel):
+    username: str = Field(min_length=3, max_length=40)
+    password: str = Field(min_length=12, max_length=256)
+
+
+class SettingsUpdate(BaseModel):
+    default_profile: Literal["lite", "standard", "advanced"]
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request) -> dict[str, Any]:
+    user = user_for_token(bearer_token(request.headers.get("Authorization")))
+    return {"bootstrap_required": bootstrap_required(), "authenticated": user is not None, "user": user}
+
+
+@app.post("/api/auth/bootstrap", status_code=201)
+def auth_bootstrap(credentials: Credentials) -> dict[str, Any]:
+    try:
+        token, user = bootstrap_admin(credentials.username, credentials.password)
+    except ValueError as error:
+        raise HTTPException(409 if not bootstrap_required() else 422, str(error)) from error
+    audit(user["id"], "auth.bootstrap", "user", user["id"])
+    return {"token": token, "user": user, "expires_in_hours": 12}
+
+
+@app.post("/api/auth/login")
+def auth_login(credentials: Credentials) -> dict[str, Any]:
+    result = login(credentials.username, credentials.password)
+    if not result:
+        raise HTTPException(401, "Invalid username or password")
+    token, user = result
+    audit(user["id"], "auth.login", "user", user["id"])
+    return {"token": token, "user": user, "expires_in_hours": 12}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request) -> dict[str, str]:
+    audit(request.state.user["id"], "auth.logout", "user", request.state.user["id"])
+    revoke_session(request.state.session_token)
+    return {"status": "signed_out"}
 
 
 @app.get("/health")
@@ -103,6 +163,7 @@ def health() -> dict[str, Any]:
 
 @app.post("/api/cases/intake", status_code=201)
 async def intake_case(
+    request: Request,
     file: UploadFile = File(...),
     case_name: str = Form(..., min_length=1, max_length=160),
     analyst_note: str = Form(default="", max_length=4000),
@@ -116,6 +177,7 @@ async def intake_case(
         raise HTTPException(409, {"code": "dynamic_lab_not_configured", "message": "No isolated dynamic lab is configured. Uploaded APKs are never executed on this host."})
     upload = await store_upload(file)
     case_id, job_id, sample_already_known = create_case_and_job(upload, case_name, analyst_note, profile, nvidia_reasoning, isolated_dynamic_lab)
+    audit(request.state.user["id"], "case.intake", "case", case_id, {"job_id": job_id, "sample_sha256": upload.sha256})
     return {
         "case_id": case_id,
         "job_id": job_id,
@@ -169,6 +231,30 @@ def list_cases(
             [*parameters, page_size, (page - 1) * page_size],
         ).fetchall()]
     return {"items": records, "page": page, "page_size": page_size, "total": total}
+
+
+@app.get("/api/samples")
+def list_samples(
+    search: str = Query(default="", max_length=160),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    where = "WHERE samples.original_filename LIKE ? OR samples.sha256 LIKE ?" if search else ""
+    parameters: list[Any] = [f"%{search}%", f"%{search}%"] if search else []
+    with transaction() as connection:
+        total = connection.execute(f"SELECT count(*) FROM samples {where}", parameters).fetchone()[0]
+        rows = connection.execute(
+            f"""SELECT samples.*,
+                (SELECT count(*) FROM cases WHERE cases.sample_sha256 = samples.sha256) AS case_count,
+                (SELECT count(*) FROM findings JOIN cases ON cases.id = findings.case_id WHERE cases.sample_sha256 = samples.sha256) AS finding_count,
+                (SELECT count(*) FROM blindspots JOIN cases ON cases.id = blindspots.case_id WHERE cases.sample_sha256 = samples.sha256) AS blindspot_count,
+                (SELECT id FROM cases WHERE cases.sample_sha256 = samples.sha256 ORDER BY created_at DESC LIMIT 1) AS latest_case_id,
+                (SELECT title FROM cases WHERE cases.sample_sha256 = samples.sha256 ORDER BY created_at DESC LIMIT 1) AS latest_case_title,
+                (SELECT status FROM cases WHERE cases.sample_sha256 = samples.sha256 ORDER BY created_at DESC LIMIT 1) AS latest_status
+                FROM samples {where} ORDER BY samples.created_at DESC LIMIT ? OFFSET ?""",
+            [*parameters, page_size, (page - 1) * page_size],
+        ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": total, "page": page, "page_size": page_size}
 
 
 @app.get("/api/cases/{case_id}")
@@ -230,6 +316,23 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     return {"job_id": job_id, "status": "cancellation_requested"}
 
 
+@app.post("/api/jobs/{job_id}/retry", status_code=201)
+def retry_job(job_id: str, request: Request) -> dict[str, Any]:
+    job = _job_or_404(job_id)
+    if job["status"] not in {"completed", "partial", "failed", "cancelled"}:
+        raise HTTPException(409, "Only terminal jobs can be retried")
+    with transaction() as connection:
+        active = connection.execute(
+            "SELECT id FROM jobs WHERE case_id = ? AND status IN ('queued', 'running') LIMIT 1",
+            (job["case_id"],),
+        ).fetchone()
+    if active:
+        raise HTTPException(409, "This case already has an active analysis job")
+    new_job_id = create_retry_job(job["case_id"])
+    audit(request.state.user["id"], "job.retry", "job", new_job_id, {"previous_job_id": job_id, "case_id": job["case_id"]})
+    return {"job_id": new_job_id, "case_id": job["case_id"], "status": "queued", "previous_job_id": job_id}
+
+
 @app.get("/api/findings")
 def list_findings(
     severity: str | None = None,
@@ -254,8 +357,39 @@ def list_findings(
     return {"items": records, "total": total, "page": page, "page_size": page_size}
 
 
+@app.get("/api/indicators")
+def list_indicators(
+    search: str = Query(default="", max_length=500),
+    indicator_type: Literal["url", "domain", "ip"] | None = None,
+    case_id: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    conditions = ["1=1"]
+    parameters: list[Any] = []
+    if search:
+        conditions.append("indicators.value LIKE ?")
+        parameters.append(f"%{search}%")
+    if indicator_type:
+        conditions.append("indicators.indicator_type = ?")
+        parameters.append(indicator_type)
+    if case_id:
+        conditions.append("indicators.case_id = ?")
+        parameters.append(case_id)
+    where = " AND ".join(conditions)
+    with transaction() as connection:
+        total = connection.execute(f"SELECT count(*) FROM indicators WHERE {where}", parameters).fetchone()[0]
+        rows = connection.execute(
+            f"""SELECT indicators.*, cases.title AS case_title, cases.sample_sha256
+                FROM indicators JOIN cases ON cases.id = indicators.case_id
+                WHERE {where} ORDER BY indicators.created_at DESC LIMIT ? OFFSET ?""",
+            [*parameters, page_size, (page - 1) * page_size],
+        ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+
+
 @app.post("/api/findings/{finding_id}/review")
-def review_finding(finding_id: str, review: FindingReview) -> dict[str, Any]:
+def review_finding(finding_id: str, review: FindingReview, request: Request) -> dict[str, Any]:
     with transaction() as connection:
         finding = connection.execute("SELECT id FROM findings WHERE id = ?", (finding_id,)).fetchone()
         if not finding:
@@ -266,7 +400,48 @@ def review_finding(finding_id: str, review: FindingReview) -> dict[str, Any]:
             "INSERT INTO annotations (id, finding_id, decision, note, analyst, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (annotation_id, finding_id, review.decision, review.note, review.analyst, utcnow()),
         )
+    audit(request.state.user["id"], "finding.review", "finding", finding_id, {"decision": review.decision})
     return {"annotation_id": annotation_id, "finding_id": finding_id, "reviewer_status": review.decision}
+
+
+@app.get("/api/settings")
+def get_app_settings() -> dict[str, Any]:
+    with transaction() as connection:
+        rows = connection.execute("SELECT key, value_json, updated_at FROM app_settings ORDER BY key").fetchall()
+    values = {row["key"]: json_value(row["value_json"], None) for row in rows}
+    return {
+        "values": values,
+        "capabilities": {
+            "data_mode": "local_static_only",
+            "max_upload_bytes": settings.max_upload_bytes,
+            "nvidia": "configured" if settings.enable_nvidia else "not_configured",
+            "dynamic_lab": "not_configured",
+        },
+    }
+
+
+@app.patch("/api/settings")
+def update_app_settings(update: SettingsUpdate, request: Request) -> dict[str, Any]:
+    now = utcnow()
+    with transaction() as connection:
+        connection.execute(
+            """INSERT INTO app_settings (key, value_json, updated_at) VALUES ('default_profile', ?, ?)
+               ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at""",
+            (json.dumps(update.default_profile), now),
+        )
+    audit(request.state.user["id"], "settings.update", "settings", "default_profile", {"value": update.default_profile})
+    return get_app_settings()
+
+
+@app.get("/api/audit")
+def list_audit_events(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
+    with transaction() as connection:
+        rows = connection.execute(
+            """SELECT audit_events.*, users.username FROM audit_events
+               LEFT JOIN users ON users.id = audit_events.user_id ORDER BY audit_events.id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return {"items": [_json_fields(dict(row), "detail_json") for row in rows]}
 
 
 @app.get("/api/cases/{case_id}/graph")
@@ -327,7 +502,7 @@ def download_report(report_id: str, kind: Literal["json", "pdf", "capsule"]) -> 
 
 
 @app.post("/api/reports/{report_id}/verify")
-def verify_report(report_id: str) -> dict[str, Any]:
+def verify_report(report_id: str, request: Request) -> dict[str, Any]:
     with transaction() as connection:
         row = connection.execute("SELECT capsule_path FROM reports WHERE id = ?", (report_id,)).fetchone()
     if not row:
@@ -335,4 +510,5 @@ def verify_report(report_id: str) -> dict[str, Any]:
     result = verify_capsule(row["capsule_path"])
     with transaction() as connection:
         connection.execute("UPDATE reports SET verification_status = ? WHERE id = ?", ("verified" if result["valid"] else "failed", report_id))
+    audit(request.state.user["id"], "report.verify", "report", report_id, {"valid": result["valid"]})
     return result

@@ -150,11 +150,47 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('admin', 'analyst', 'viewer')),
+  disabled INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  subject_type TEXT NOT NULL,
+  subject_id TEXT,
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_cases_created_at ON cases(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_artifacts_case ON artifacts(case_id, artifact_type);
 CREATE INDEX IF NOT EXISTS idx_findings_case ON findings(case_id, severity);
 CREATE INDEX IF NOT EXISTS idx_blindspots_case ON blindspots(case_id, reason_code);
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash, expires_at);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at DESC);
 """
 
 
@@ -174,6 +210,10 @@ def initialise_database() -> None:
     settings.ensure_directories()
     with get_connection() as connection:
         connection.executescript(SCHEMA)
+        connection.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value_json, updated_at) VALUES ('default_profile', '\"standard\"', ?)",
+            (utcnow(),),
+        )
 
 
 @contextmanager
