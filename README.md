@@ -38,10 +38,14 @@ the Python path used on this machine; override it when yours differs.
 ```powershell
 ./scripts/dev.ps1
 # or: ./scripts/dev.ps1 -Python "C:\Path\To\python.exe"
+# if 5173 is occupied: ./scripts/dev.ps1 -WebPort 5174
 ```
 
 Open `http://127.0.0.1:5173`. The API is at `http://127.0.0.1:8000`, with its health
 check at `http://127.0.0.1:8000/health`.
+
+The script checks ports immediately before launch and stops only the API/worker processes
+it created whenever Vite exits. It will report the owning PID if a selected port is busy.
 
 For separate terminals:
 

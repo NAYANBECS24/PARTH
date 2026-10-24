@@ -27,6 +27,7 @@ class Settings:
     analysis_poll_seconds: float
     enable_nvidia: bool
     allow_fixtures: bool
+    cors_origins: tuple[str, ...]
 
     @property
     def upload_dir(self) -> Path:
@@ -58,6 +59,11 @@ def get_settings() -> Settings:
         analysis_poll_seconds=float(os.getenv("SHADOWPATH_ANALYSIS_POLL_SECONDS", "1")),
         enable_nvidia=os.getenv("SHADOWPATH_ENABLE_NVIDIA", "false").lower() == "true",
         allow_fixtures=os.getenv("SHADOWPATH_ALLOW_FIXTURES", "false").lower() == "true",
+        cors_origins=tuple(
+            origin.strip()
+            for origin in os.getenv("SHADOWPATH_CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",")
+            if origin.strip()
+        ),
     )
     settings.ensure_directories()
     return settings
