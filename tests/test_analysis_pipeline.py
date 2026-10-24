@@ -14,6 +14,7 @@ def run_isolated(script: str, tmp_path: Path) -> dict:
     environment = os.environ.copy()
     environment["SHADOWPATH_DATA_DIR"] = str(tmp_path / "data")
     environment["SHADOWPATH_DATABASE_URL"] = str(tmp_path / "data" / "shadowpath.db")
+    environment["SHADOWPATH_AUTH_DISABLED"] = "false"
     completed = subprocess.run(
         [sys.executable, "-c", script],
         cwd=ROOT,

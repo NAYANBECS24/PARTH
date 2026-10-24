@@ -52,6 +52,9 @@ check at `http://127.0.0.1:8000/health`.
 On first launch, create the local administrator with a username and a password of at
 least 12 characters. All evidence API routes and report downloads require that session.
 
+For a trusted, single-user local demo only, login can be bypassed with
+`SHADOWPATH_AUTH_DISABLED=true` in `.env`. This must remain disabled on shared machines.
+
 The script checks ports immediately before launch and stops only the API/worker processes
 it created whenever Vite exits. It will report the owning PID if a selected port is busy.
 It also restores the directory from which it was launched.

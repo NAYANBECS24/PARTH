@@ -25,6 +25,7 @@ class Settings:
     max_uncompressed_bytes: int
     max_compression_ratio: int
     analysis_poll_seconds: float
+    auth_disabled: bool
     enable_nvidia: bool
     allow_fixtures: bool
     cors_origins: tuple[str, ...]
@@ -57,6 +58,7 @@ def get_settings() -> Settings:
         max_uncompressed_bytes=int(os.getenv("SHADOWPATH_MAX_UNCOMPRESSED_BYTES", "536870912")),
         max_compression_ratio=int(os.getenv("SHADOWPATH_MAX_COMPRESSION_RATIO", "120")),
         analysis_poll_seconds=float(os.getenv("SHADOWPATH_ANALYSIS_POLL_SECONDS", "1")),
+        auth_disabled=os.getenv("SHADOWPATH_AUTH_DISABLED", "false").lower() == "true",
         enable_nvidia=os.getenv("SHADOWPATH_ENABLE_NVIDIA", "false").lower() == "true",
         allow_fixtures=os.getenv("SHADOWPATH_ALLOW_FIXTURES", "false").lower() == "true",
         cors_origins=tuple(

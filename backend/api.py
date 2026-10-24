@@ -76,6 +76,10 @@ async def authenticate_api(request: Request, call_next):  # type: ignore[no-unty
     path = request.url.path
     if request.method == "OPTIONS" or path == "/health" or path in PUBLIC_API_PATHS or not path.startswith("/api/"):
         return await call_next(request)
+    if settings.auth_disabled:
+        request.state.user = {"id": None, "username": "local-analyst", "role": "admin"}
+        request.state.session_token = None
+        return await call_next(request)
     token = bearer_token(request.headers.get("Authorization"))
     user = user_for_token(token)
     if not user:
@@ -102,8 +106,15 @@ class SettingsUpdate(BaseModel):
 
 @app.get("/api/auth/status")
 def auth_status(request: Request) -> dict[str, Any]:
+    if settings.auth_disabled:
+        return {
+            "bootstrap_required": False,
+            "authenticated": True,
+            "auth_disabled": True,
+            "user": {"id": None, "username": "local-analyst", "role": "admin"},
+        }
     user = user_for_token(bearer_token(request.headers.get("Authorization")))
-    return {"bootstrap_required": bootstrap_required(), "authenticated": user is not None, "user": user}
+    return {"bootstrap_required": bootstrap_required(), "authenticated": user is not None, "auth_disabled": False, "user": user}
 
 
 @app.post("/api/auth/bootstrap", status_code=201)
@@ -129,7 +140,8 @@ def auth_login(credentials: Credentials) -> dict[str, Any]:
 @app.post("/api/auth/logout")
 def auth_logout(request: Request) -> dict[str, str]:
     audit(request.state.user["id"], "auth.logout", "user", request.state.user["id"])
-    revoke_session(request.state.session_token)
+    if request.state.session_token:
+        revoke_session(request.state.session_token)
     return {"status": "signed_out"}
 
 
@@ -153,6 +165,7 @@ def health() -> dict[str, Any]:
         "worker": {"queued_jobs": queued, "running_jobs": active},
         "cases": cases,
         "adapters": {
+            "access_control": "bypassed_local_mode" if settings.auth_disabled else "enabled",
             "zip_inventory": "available",
             "androguard": androguard_status,
             "nvidia": "configured" if settings.enable_nvidia else "not_configured",
@@ -413,6 +426,7 @@ def get_app_settings() -> dict[str, Any]:
         "values": values,
         "capabilities": {
             "data_mode": "local_static_only",
+            "access_control": "bypassed_local_mode" if settings.auth_disabled else "enabled",
             "max_upload_bytes": settings.max_upload_bytes,
             "nvidia": "configured" if settings.enable_nvidia else "not_configured",
             "dynamic_lab": "not_configured",

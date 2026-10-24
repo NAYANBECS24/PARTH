@@ -97,13 +97,14 @@ export interface JobDetail {
 }
 
 export interface AuthUser {
-  id: string;
+  id: string | null;
   username: string;
   role: "admin" | "analyst" | "viewer";
 }
 export interface AuthStatus {
   bootstrap_required: boolean;
   authenticated: boolean;
+  auth_disabled: boolean;
   user: AuthUser | null;
 }
 export interface SampleRecord {
