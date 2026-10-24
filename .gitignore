@@ -5,9 +5,5 @@ __pycache__/
 .mypy_cache/
 node_modules/
 frontend/dist/
-data/*.db
-data/uploads/
-data/reports/
-data/capsules/
+data/
 *.pyc
-
