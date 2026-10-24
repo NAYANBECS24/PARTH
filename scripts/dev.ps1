@@ -45,6 +45,8 @@ function Stop-ManagedProcess {
   }
 }
 
+$startingLocation = Get-Location
+try {
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
 
@@ -88,4 +90,8 @@ try {
 finally {
   Stop-ManagedProcess -Process $worker -Name "worker"
   Stop-ManagedProcess -Process $api -Name "API"
+}
+}
+finally {
+  Set-Location -LiteralPath $startingLocation.Path
 }

@@ -46,6 +46,7 @@ check at `http://127.0.0.1:8000/health`.
 
 The script checks ports immediately before launch and stops only the API/worker processes
 it created whenever Vite exits. It will report the owning PID if a selected port is busy.
+It also restores the directory from which it was launched.
 
 For separate terminals:
 
