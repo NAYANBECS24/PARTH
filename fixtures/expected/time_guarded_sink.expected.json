@@ -1,0 +1,12 @@
+{
+  "fixture": "time_guarded_sink",
+  "synthetic": true,
+  "expected": {
+    "guard_class": "simple_time_comparison",
+    "solver_status": "sat",
+    "sensitive_operation": "android.permission.SEND_SMS",
+    "evidence_status": "conditionally_reachable"
+  },
+  "notes": "Controlled fixture with time guard resolved via Z3 solver.",
+  "apk_sha256": "46a755ef43a835aa5b5b1b24f3778089ee84ff65246494515e6d267bb7b78dec"
+}

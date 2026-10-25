@@ -13,10 +13,12 @@ import {
   Archive,
   ArrowLeftRight,
   BookOpen,
+  Bot,
   Boxes,
   Check,
   ChevronRight,
   CircleHelp,
+  Cloud,
   ClipboardCheck,
   Command,
   Copy,
@@ -29,19 +31,25 @@ import {
   LoaderCircle,
   LockKeyhole,
   LogOut,
+  Menu,
   Moon,
   Network,
   PanelLeftClose,
   Plus,
   Search,
+  Send,
   Settings,
+  ShieldCheck,
   ShieldAlert,
   Sun,
   UploadCloud,
+  Wrench,
 } from "lucide-react";
 import {
   api,
   type AppSettings,
+  type AssistantThreadDetail,
+  type AssistantToolsResponse,
   type AuditEvent,
   type AuthUser,
   type CaseDetail,
@@ -54,7 +62,11 @@ import {
 } from "./api";
 import { dateTime, fileSize, shortHash, statusLabel } from "./lib";
 import type {
+  AIProposal,
+  AssistantMessage,
+  AssistantThread,
   Blindspot,
+  CapabilitiesMap,
   CaseRecord,
   Finding,
   JobStage,
@@ -67,12 +79,14 @@ type Tab =
   | "genome"
   | "behaviour"
   | "blindspots"
+  | "ai"
   | "iocs"
   | "evidence"
   | "reports";
 
 const primaryNav = [
   { path: "/app/overview", label: "Overview", icon: Home },
+  { path: "/app/assistant", label: "NEXUS assistant", icon: Bot },
   { path: "/app/scans/new", label: "New investigation", icon: Plus },
   { path: "/app/cases", label: "Investigations", icon: FolderSearch },
   { path: "/app/samples", label: "APK library", icon: Archive },
@@ -185,6 +199,7 @@ function StatusPill({ value }: { value: string }) {
         : value.includes("running") || value.includes("queued")
           ? "info"
           : value.includes("completed") ||
+              value.includes("clear") ||
               value.includes("verified") ||
               value.includes("observed")
             ? "success"
@@ -229,7 +244,7 @@ function PageHeading({
 }) {
   return (
     <div className="page-heading">
-      <div>
+      <div className="page-heading-copy">
         <p className="eyebrow">{eyebrow ?? "INVESTIGATION WORKSPACE"}</p>
         <h1>{title}</h1>
         <p className="page-description">{description}</p>
@@ -276,11 +291,17 @@ function AppShell({
         const Icon = item.icon;
         const active =
           path === item.path ||
-          (item.path === "/app/cases" && path.startsWith("/app/cases/"));
+          (item.path === "/app/cases" && path.startsWith("/app/cases/")) ||
+          (item.path === "/app/assistant" && path.startsWith("/app/assistant/"));
         return (
           <button
             className={`nav-item ${active ? "active" : ""}`}
-            onClick={() => navigate(item.path)}
+            onClick={() => {
+              navigate(item.path);
+              if (window.matchMedia("(max-width: 780px)").matches) {
+                setCollapsed(false);
+              }
+            }}
             key={item.path}
             title={collapsed ? item.label : undefined}
           >
@@ -325,6 +346,15 @@ function AppShell({
         </nav>
         <div className="sidebar-bottom">
           {navGroup("SYSTEM", systemNav)}
+          <div className="sidebar-security">
+            <ShieldCheck size={16} />
+            {!collapsed && (
+              <span>
+                <strong>Evidence plane</strong>
+                <small>Local · protected</small>
+              </span>
+            )}
+          </div>
           <div className="data-mode">
             <span className="mode-led" />
             {!collapsed && <span>LOCAL STATIC MODE</span>}
@@ -332,10 +362,24 @@ function AppShell({
           <small>{!collapsed && "v0.2.0 LOCAL"}</small>
         </div>
       </aside>
+      {collapsed && (
+        <button
+          className="sidebar-scrim"
+          onClick={() => setCollapsed(false)}
+          aria-label="Close navigation"
+        />
+      )}
       <main className="main">
         <header className="topbar">
+          <button
+            className="mobile-nav-toggle"
+            onClick={() => setCollapsed((value) => !value)}
+            aria-label="Open navigation"
+          >
+            <Menu size={18} />
+          </button>
           <div className="breadcrumbs">
-            <span>SHADOWPATH Ω</span>
+            <span>SPΩ / NEXUS</span>
             <ChevronRight size={15} />
             <span>
               {path
@@ -351,8 +395,8 @@ function AppShell({
               onClick={() => setPaletteOpen(true)}
             >
               <Search size={16} />
-              <span>Search or command</span>
-              <kbd>⌘ K</kbd>
+              <span>Navigate or inspect</span>
+              <kbd>Ctrl K</kbd>
             </button>
             <span className="topbar-status">
               <span className="mode-led" />
@@ -381,63 +425,151 @@ function AppShell({
             </button>
           </div>
         </header>
+        <div className="workspace-rail" aria-label="Enforced runtime boundaries">
+          <span><i /> MODE&nbsp; LOCAL STATIC</span>
+          <span>HOST EXECUTION&nbsp; DISABLED</span>
+          <span>EVIDENCE&nbsp; PERSISTED</span>
+          <span>CLAIMS&nbsp; BOUNDED</span>
+        </div>
         <section className="workspace">{children}</section>
       </main>
-      {paletteOpen && (
-        <div
-          className="palette-backdrop"
-          onMouseDown={() => setPaletteOpen(false)}
-        >
-          <div
-            className="command-palette"
-            role="dialog"
-            aria-modal="true"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="palette-search">
-              <Command size={18} />
-              <input
-                autoFocus
-                placeholder="Navigate to…"
-                aria-label="Command palette"
-              />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        navigate={navigate}
+      />
+    </div>
+  );
+}
+
+function CommandPalette({
+  open,
+  onClose,
+  navigate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  navigate: Navigate;
+}) {
+  const [query, setQuery] = useState("");
+  const [cases, setCases] = useState<CaseRecord[]>([]);
+
+  useEffect(() => {
+    if (open) {
+      api
+        .cases("")
+        .then((r) => setCases(r.items))
+        .catch(() => undefined);
+    }
+  }, [open]);
+
+  const allActions = useMemo(
+    () => [
+      { path: "/app/overview", label: "Overview", group: "Navigation", icon: Home },
+      { path: "/app/assistant", label: "Ask NEXUS Analyst Assistant", group: "Actions", icon: Bot },
+      { path: "/app/scans/new", label: "New Investigation (Upload APK)", group: "Actions", icon: Plus },
+      { path: "/app/cases", label: "Investigations Library", group: "Navigation", icon: FolderSearch },
+      { path: "/app/samples", label: "APK Sample Library", group: "Navigation", icon: Archive },
+      { path: "/app/findings", label: "Findings & Triage", group: "Intelligence", icon: ShieldAlert },
+      { path: "/app/graph", label: "Evidence Graph Explorer", group: "Intelligence", icon: GitBranch },
+      { path: "/app/indicators", label: "Indicators & IoCs", group: "Intelligence", icon: Network },
+      { path: "/app/compare", label: "Case Comparison", group: "Intelligence", icon: ArrowLeftRight },
+      { path: "/app/reports", label: "Reports & Forensic Capsules", group: "Intelligence", icon: FileDown },
+      { path: "/app/health", label: "System Health & RE Toolchain", group: "System", icon: HeartPulse },
+      { path: "/app/settings", label: "Settings & Boundaries", group: "System", icon: Settings },
+    ],
+    [],
+  );
+
+  const filteredActions = useMemo(() => {
+    if (!query.trim()) return allActions;
+    const q = query.toLowerCase();
+    return allActions.filter(
+      (a) => a.label.toLowerCase().includes(q) || a.path.includes(q),
+    );
+  }, [allActions, query]);
+
+  const filteredCases = useMemo(() => {
+    if (!query.trim()) return cases.slice(0, 5);
+    const q = query.toLowerCase();
+    return cases.filter(
+      (c) =>
+        c.title.toLowerCase().includes(q) ||
+        c.original_filename.toLowerCase().includes(q) ||
+        c.sample_sha256.includes(q),
+    );
+  }, [cases, query]);
+
+  if (!open) return null;
+
+  return (
+    <div className="palette-backdrop" onMouseDown={onClose}>
+      <div
+        className="command-palette"
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="palette-search">
+          <Command size={18} />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search views, actions, or cases... (Esc to close)"
+            aria-label="Command palette"
+          />
+        </div>
+
+        <div className="palette-results">
+          {filteredActions.length > 0 && (
+            <div className="palette-group">
+              <p className="eyebrow">COMMANDS & VIEWS</p>
+              {filteredActions.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.path}
+                    className="palette-item"
+                    onClick={() => {
+                      navigate(item.path);
+                      onClose();
+                    }}
+                  >
+                    <Icon size={17} />
+                    <span>{item.label}</span>
+                    <span className="palette-tag">{item.group}</span>
+                  </button>
+                );
+              })}
             </div>
-            <p>QUICK ACTIONS</p>
-            {[
-              {
-                path: "/app/scans/new",
-                label: "Start a new investigation",
-                icon: Plus,
-              },
-              {
-                path: "/app/cases",
-                label: "Browse investigations",
-                icon: FolderSearch,
-              },
-              {
-                path: "/app/findings",
-                label: "Review findings",
-                icon: ShieldAlert,
-              },
-            ].map((item) => {
-              const Icon = item.icon;
-              return (
+          )}
+
+          {filteredCases.length > 0 && (
+            <div className="palette-group">
+              <p className="eyebrow">RECENT INVESTIGATIONS</p>
+              {filteredCases.map((c) => (
                 <button
-                  key={item.path}
+                  key={c.id}
+                  className="palette-item"
                   onClick={() => {
-                    navigate(item.path);
-                    setPaletteOpen(false);
+                    navigate(`/app/cases/${c.id}`);
+                    onClose();
                   }}
                 >
-                  <Icon size={17} />
-                  {item.label}
-                  <ChevronRight size={16} />
+                  <FolderSearch size={17} />
+                  <span>{c.title}</span>
+                  <code className="palette-hash">{c.sample_sha256.slice(0, 8)}</code>
                 </button>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
+
+          {filteredActions.length === 0 && filteredCases.length === 0 && (
+            <div className="palette-empty">No matching views or cases found.</div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -447,16 +579,25 @@ function MetricCard({
   value,
   detail,
   status,
+  icon: icon,
+  index,
 }: {
   label: string;
   value: string | number;
   detail: string;
   status?: string;
+  icon: typeof Activity;
+  index: string;
 }) {
+  const Icon = icon;
   return (
     <div className="metric-card">
+      <div className="metric-card-head">
+        <span>{index}</span>
+        <Icon size={16} />
+      </div>
       <p>{label}</p>
-      <div>
+      <div className="metric-card-value">
         <strong>{value}</strong>
         {status && <StatusPill value={status} />}
       </div>
@@ -495,6 +636,12 @@ function OverviewPage({ navigate }: { navigate: Navigate }) {
         description="Evidence-backed work only. Risk and inspection completeness are shown as separate dimensions."
       >
         <button
+          className="secondary-button"
+          onClick={() => navigate("/app/assistant")}
+        >
+          <Bot size={16} /> Query NEXUS
+        </button>
+        <button
           className="primary-button"
           onClick={() => navigate("/app/scans/new")}
         >
@@ -517,24 +664,51 @@ function OverviewPage({ navigate }: { navigate: Navigate }) {
         />
       ) : (
         <>
+          <section className="operations-deck">
+            <div className="operations-deck-copy">
+              <span className="operations-mark"><Activity size={18} /></span>
+              <div>
+                <p className="eyebrow">LIVE OPERATIONAL PICTURE</p>
+                <h2>Local evidence plane is ready</h2>
+                <p>
+                  {data.counts.active_jobs
+                    ? `${data.counts.active_jobs} analysis job${data.counts.active_jobs === 1 ? " is" : "s are"} active. Evidence remains available while work continues.`
+                    : "No analysis is running. Persisted cases and evidence remain available for review."}
+                </p>
+              </div>
+            </div>
+            <div className="operations-facts">
+              <div><span>QUEUE</span><strong>{data.counts.active_jobs}</strong></div>
+              <div><span>REVIEW</span><strong>{data.counts.unreviewed_high_priority_findings}</strong></div>
+              <div><span>UNKNOWNS</span><strong>{data.counts.open_blindspots}</strong></div>
+            </div>
+          </section>
           <div className="metrics-grid">
             <MetricCard
+              index="01"
+              icon={Activity}
               label="Active investigations"
               value={data.counts.active_jobs}
               detail="Persisted queued or running jobs"
-              status={data.counts.active_jobs ? "running" : "completed"}
+              status={data.counts.active_jobs ? "running" : "queue_clear"}
             />
             <MetricCard
+              index="02"
+              icon={ShieldAlert}
               label="High-priority review"
               value={data.counts.unreviewed_high_priority_findings}
               detail="Evidence-backed high / critical findings"
             />
             <MetricCard
+              index="03"
+              icon={CircleHelp}
               label="Unresolved blindspots"
               value={data.counts.open_blindspots}
               detail="Explicit unknowns across all cases"
             />
             <MetricCard
+              index="04"
+              icon={Archive}
               label="Cases in library"
               value={data.counts.cases}
               detail="Immutable APK hashes, separate case records"
@@ -719,10 +893,17 @@ function NewInvestigationPage({ navigate }: { navigate: Navigate }) {
   const [hash, setHash] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [nvidiaReasoning, setNvidiaReasoning] = useState(false);
+  const [nvidiaStatus, setNvidiaStatus] = useState("not_configured");
+  const [nvidiaModel, setNvidiaModel] = useState<string | null>(null);
   useEffect(() => {
     void api
       .settings()
-      .then((result) => setProfile(result.values.default_profile))
+      .then((result) => {
+        setProfile(result.values.default_profile);
+        setNvidiaStatus(result.capabilities.nvidia);
+        setNvidiaModel(result.capabilities.nvidia_model);
+      })
       .catch(() => undefined);
   }, []);
   function pick(selected: File | null) {
@@ -766,7 +947,7 @@ function NewInvestigationPage({ navigate }: { navigate: Navigate }) {
     body.set("case_name", caseName.trim());
     body.set("analyst_note", note);
     body.set("profile", profile);
-    body.set("nvidia_reasoning", "false");
+    body.set("nvidia_reasoning", String(nvidiaReasoning));
     body.set("isolated_dynamic_lab", "false");
     try {
       const result = await api.intake(body);
@@ -909,10 +1090,23 @@ function NewInvestigationPage({ navigate }: { navigate: Navigate }) {
             </div>
             <div className="setting-state">
               <span>
-                <span className="switch off" /> NVIDIA TRI-PROOF reasoning
+                <button
+                  type="button"
+                  className={`switch ${nvidiaReasoning ? "on" : "off"}`}
+                  role="switch"
+                  aria-checked={nvidiaReasoning}
+                  aria-label="Enable NVIDIA TRI-PROOF reasoning"
+                  disabled={nvidiaStatus !== "configured"}
+                  onClick={() => setNvidiaReasoning((value) => !value)}
+                />{" "}
+                NVIDIA TRI-PROOF reasoning
               </span>
-              <StatusPill value="not_configured" />
-              <small>No cloud model request will be made.</small>
+              <StatusPill value={nvidiaStatus} />
+              <small>
+                {nvidiaStatus === "configured"
+                  ? `${nvidiaModel} · opt-in sanitized evidence only`
+                  : "Enter a rotated key at startup to enable it."}
+              </small>
             </div>
             <div className="setting-state">
               <span>
@@ -972,6 +1166,12 @@ function NewInvestigationPage({ navigate }: { navigate: Navigate }) {
               <div>
                 <span>Data mode</span>
                 <StatusPill value="local_static_only" />
+              </div>
+              <div>
+                <span>NVIDIA TRI-PROOF</span>
+                <StatusPill
+                  value={nvidiaReasoning ? "enabled_with_consent" : "disabled"}
+                />
               </div>
             </div>
             <div className="privacy-note">
@@ -1254,8 +1454,12 @@ function CasePage({ id, navigate }: { id: string; navigate: Navigate }) {
   const tabs: Array<[Tab, string]> = [
     ["summary", "Summary"],
     ["genome", "Static genome"],
-    ["behaviour", "Behaviour & paths"],
+    [
+      "behaviour",
+      `Behaviour & paths (${detail.guard_paths?.length ?? 0})`,
+    ],
     ["blindspots", `Blindspot ledger (${detail.blindspots.length})`],
+    ["ai", `TRI-PROOF AI (${detail.ai_proposals.length})`],
     ["iocs", "Network & IoCs"],
     ["evidence", "Evidence graph"],
     ["reports", "Capsules & reports"],
@@ -1263,8 +1467,13 @@ function CasePage({ id, navigate }: { id: string; navigate: Navigate }) {
   return (
     <>
       <div className="case-hero">
-        <div>
-          <p className="eyebrow">CASE {shortHash(detail.case.id)}</p>
+        <div className="case-identity">
+          <div className="case-hero-kicker">
+            <p className="eyebrow">CASE {shortHash(detail.case.id)}</p>
+            {Boolean(detail.case.synthetic_fixture) && (
+              <span className="synthetic-flag">SYNTHETIC TEST DATA</span>
+            )}
+          </div>
           <h1>{detail.case.title}</h1>
           <p>
             {detail.case.original_filename} ·{" "}
@@ -1272,12 +1481,31 @@ function CasePage({ id, navigate }: { id: string; navigate: Navigate }) {
           </p>
         </div>
         <div className="case-hero-state">
-          <StatusPill value={detail.case.status} />
-          <RiskLabel
-            tier={detail.case.risk_tier}
-            score={detail.case.risk_score}
-          />
+          <button
+            className="secondary-button"
+            onClick={() => navigate(`/app/assistant/case/${id}`)}
+          >
+            <Bot size={16} /> Ask NEXUS
+          </button>
+          <div className="case-state-unit">
+            <span>Analysis state</span>
+            <StatusPill value={detail.case.status} />
+          </div>
+          <div className="case-state-unit">
+            <span>Evidence risk</span>
+            <RiskLabel
+              tier={detail.case.risk_tier}
+              score={detail.case.risk_score}
+            />
+          </div>
         </div>
+      </div>
+      <div className="case-facts" aria-label="Case evidence summary">
+        <div><span>PROFILE</span><strong>{statusLabel(detail.case.profile)}</strong></div>
+        <div><span>ARTIFACTS</span><strong>{detail.artifacts.length}</strong></div>
+        <div><span>FINDINGS</span><strong>{detail.findings.length}</strong></div>
+        <div><span>BLINDSPOTS</span><strong>{detail.blindspots.length}</strong></div>
+        <div><span>STATIC COVERAGE</span><strong>{detail.case.completeness}%</strong></div>
       </div>
       <div className="case-tabs" role="tablist">
         {tabs.map(([key, label]) => (
@@ -1297,8 +1525,9 @@ function CasePage({ id, navigate }: { id: string; navigate: Navigate }) {
           <SummaryTab detail={detail} navigate={navigate} />
         )}
         {tab === "genome" && <GenomeTab detail={detail} />}
-        {tab === "behaviour" && <BehaviourTab />}
+        {tab === "behaviour" && <BehaviourTab detail={detail} />}
         {tab === "blindspots" && <BlindspotTab records={detail.blindspots} />}
+        {tab === "ai" && <TriProofTab records={detail.ai_proposals} />}
         {tab === "iocs" && <IocTab detail={detail} />}
         {tab === "evidence" && <GraphTab caseId={id} />}
         {tab === "reports" && <ReportsTab records={detail.reports} />}
@@ -1454,21 +1683,112 @@ function GenomeTab({ detail }: { detail: CaseDetail }) {
   );
 }
 
-function BehaviourTab() {
-  return (
-    <div className="panel">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">BEHAVIOUR & PATHS</p>
-          <h2>Guarded-path evaluation</h2>
+function BehaviourTab({ detail }: { detail: CaseDetail }) {
+  const paths = detail.guard_paths ?? [];
+  if (!paths.length) {
+    return (
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">BEHAVIOUR & PATHS</p>
+            <h2>Guarded-path evaluation & SMT Solver</h2>
+          </div>
+          <StatusPill value="unsupported" />
         </div>
-        <StatusPill value="unsupported" />
+        <EmptyState
+          icon={GitBranch}
+          title="No reachability claim is available"
+          message="This running scope inventories DEX and records limitations. For arbitrary APKs without bounded guard expressions, reachability analysis is recorded as unsupported. Upload a guarded fixture (e.g. time_guarded_sink or device_guarded_sink) to observe Z3 witness reconstruction."
+        />
       </div>
-      <EmptyState
-        icon={GitBranch}
-        title="No reachability claim is available"
-        message="This running scope inventories DEX and records limitations but does not construct a resolved DEX call graph, SMT proof, candidate trigger witness, or runtime observation. Those are deliberately distinct states."
-      />
+    );
+  }
+
+  return (
+    <div className="guarded-paths-container">
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Z3 SMT THEOREM PROVER</p>
+            <h2>Guarded sensitive paths ({paths.length})</h2>
+          </div>
+          <span className="factual-note">Z3 Solver Active</span>
+        </div>
+        <p className="page-description">
+          Evaluated via bounded backward slicing and Z3Py constraint solving. A trigger witness indicates satisfiability under modeled assumptions, not proof of device runtime execution.
+        </p>
+      </div>
+
+      <div className="guard-path-cards">
+        {paths.map((item) => {
+          const isSat = item.solver_status === "sat";
+          const isUnsat = item.solver_status === "unsat";
+          return (
+            <article
+              className={`guard-card panel ${isSat ? "guard-sat" : isUnsat ? "guard-unsat" : ""}`}
+              key={item.id}
+            >
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">TARGET SENSITIVE SINK</p>
+                  <h3>
+                    <code>{item.target_method_id}</code>
+                  </h3>
+                </div>
+                <StatusPill value={item.solver_status} />
+              </div>
+
+              {isSat && Object.keys(item.witness).length > 0 && (
+                <div className="witness-box">
+                  <div className="witness-header">
+                    <strong>Synthesized Trigger Witness (Z3 SAT)</strong>
+                    <span className="status-pill success">
+                      <span className="status-dot" /> Satisfying Model
+                    </span>
+                  </div>
+                  <div className="witness-variables">
+                    {Object.entries(item.witness).map(([vName, vVal]) => (
+                      <div className="witness-variable" key={vName}>
+                        <span className="v-name">{vName}</span>
+                        <span className="v-op">=</span>
+                        <code className="v-val">{JSON.stringify(vVal)}</code>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {isUnsat && (
+                <div className="unsat-box">
+                  <strong>Proved Unsatisfiable (Z3 UNSAT)</strong>
+                  <p>
+                    Constraints on this branch are mutually contradictory. Dead code
+                    path under modeled constraints.
+                  </p>
+                </div>
+              )}
+
+              <details className="guard-ast-details">
+                <summary>Inspect Guard Predicate AST (JSON)</summary>
+                <pre className="forensic-code-view">
+                  <code>{JSON.stringify(item.guard_ast, null, 2)}</code>
+                </pre>
+              </details>
+
+              {item.limitations && item.limitations.length > 0 && (
+                <div className="guard-limitations">
+                  <p className="eyebrow">LIMITATIONS & ASSUMPTIONS</p>
+                  <ul>
+                    {item.limitations.map((lim, i) => (
+                      <li key={i}>{lim}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1507,6 +1827,105 @@ function BlindspotTab({ records }: { records: Blindspot[] }) {
           <StatusPill value="unknown" />
         </article>
       ))}
+    </div>
+  );
+}
+
+function EvidenceIds({ ids }: { ids: string[] }) {
+  if (!ids.length) return <small>No evidence IDs cited</small>;
+  return (
+    <div className="evidence-chips">
+      {ids.map((id) => (
+        <code key={id}>{shortHash(id, 14)}</code>
+      ))}
+    </div>
+  );
+}
+
+function TriProofTab({ records }: { records: AIProposal[] }) {
+  if (!records.length) {
+    return (
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">TRI-PROOF AI</p>
+            <h2>Optional hypothesis review</h2>
+          </div>
+          <StatusPill value="disabled" />
+        </div>
+        <EmptyState
+          icon={CircleHelp}
+          title="No AI proposal was requested"
+          message="Enable NVIDIA reasoning during intake to send only a minimized, redacted evidence summary. Deterministic evidence remains authoritative."
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="ai-proposal-list">
+      {records.map((record) => {
+        const proposal = record.proposal;
+        return (
+          <section className="panel" key={record.id}>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">AI PROPOSAL · NON-AUTHORITATIVE</p>
+                <h2>Competing forensic hypotheses</h2>
+                <small>
+                  {record.model} · {dateTime(record.created_at)}
+                </small>
+              </div>
+              <StatusPill value={record.status} />
+            </div>
+            {record.status !== "generated" ? (
+              <ErrorPanel
+                error={
+                  record.validation_errors.join(" · ") ||
+                  "The provider did not return a validated proposal."
+                }
+              />
+            ) : (
+              <div className="tri-proof-grid">
+                <article>
+                  <span>Malicious hypothesis</span>
+                  <h3>{proposal.malicious_hypothesis?.statement}</h3>
+                  <EvidenceIds
+                    ids={
+                      proposal.malicious_hypothesis?.supporting_evidence_ids ??
+                      []
+                    }
+                  />
+                </article>
+                <article>
+                  <span>Benign explanation</span>
+                  <h3>{proposal.benign_explanation?.statement}</h3>
+                  <EvidenceIds
+                    ids={
+                      proposal.benign_explanation?.supporting_evidence_ids ?? []
+                    }
+                  />
+                </article>
+                <article className="full-width">
+                  <span>Discriminating test</span>
+                  <h3>{proposal.discriminating_test}</h3>
+                  <p>{proposal.proposed_experiment?.rationale}</p>
+                  <div className="proposal-operation">
+                    <StatusPill value="approval_required" />
+                    <code>{proposal.proposed_experiment?.operation_id}</code>
+                  </div>
+                </article>
+                <div className="privacy-note full-width">
+                  <LockKeyhole size={17} />
+                  <p>
+                    {proposal.notes} This proposal cannot create findings or
+                    change observation status.
+                  </p>
+                </div>
+              </div>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -1745,9 +2164,17 @@ function ReportList({ records }: { records: ReportRecord[] }) {
             value={verification[record.id] ?? record.verification_status}
           />
           <div className="report-actions">
-              <button onClick={() => void api.downloadReport(record.id, "json")}>JSON</button>
-              <button onClick={() => void api.downloadReport(record.id, "pdf")}>PDF</button>
-              <button onClick={() => void api.downloadReport(record.id, "capsule")}>Capsule</button>
+            <button onClick={() => void api.downloadReport(record.id, "json")}>
+              JSON
+            </button>
+            <button onClick={() => void api.downloadReport(record.id, "pdf")}>
+              PDF
+            </button>
+            <button
+              onClick={() => void api.downloadReport(record.id, "capsule")}
+            >
+              Capsule
+            </button>
             <button onClick={() => void verify(record)}>Verify</button>
           </div>
         </article>
@@ -1805,8 +2232,9 @@ function ReportsPage() {
 
 function HealthPage() {
   const [data, setData] = useState<Health | null>(null);
+  const [capabilities, setCapabilities] = useState<CapabilitiesMap | null>(null);
   const [error, setError] = useState("");
-  const load = () =>
+  const load = () => {
     api
       .health()
       .then(setData)
@@ -1817,64 +2245,103 @@ function HealthPage() {
             : "Could not reach the service",
         ),
       );
+    api
+      .capabilities()
+      .then(setCapabilities)
+      .catch(() => undefined);
+  };
   useEffect(() => {
-    void api
-      .health()
-      .then(setData)
-      .catch((cause: unknown) =>
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : "Could not reach the service",
-        ),
-      );
+    load();
   }, []);
   if (error) return <ErrorPanel error={error} retry={load} />;
   if (!data) return <Loading />;
   return (
     <>
       <PageHeading
-        title="System health"
-        description="These states reflect direct service capability checks. Secrets and provider credentials are never shown."
+        title="System health & toolchain"
+        description="Live service capability and reverse engineering toolchain checks. Secrets and provider credentials are never shown."
       >
         <button className="secondary-button" onClick={load}>
           Refresh
         </button>
       </PageHeading>
-      <div className="health-grid">
-        <section className="panel health-card">
-          <HeartPulse size={21} />
-          <h2>Backend service</h2>
-          <StatusPill
-            value={data.status === "ok" ? "available" : data.status}
-          />
-          <p>Local API and SQLite persistence</p>
+
+      <section className="panel-group">
+        <h2 className="section-title">Core Runtime Services</h2>
+        <div className="health-grid">
+          <section className="panel health-card">
+            <HeartPulse size={21} />
+            <h2>Backend service</h2>
+            <StatusPill
+              value={data.status === "ok" ? "available" : data.status}
+            />
+            <p>Local API and SQLite persistence</p>
+          </section>
+          <section className="panel health-card">
+            <Boxes size={21} />
+            <h2>Analysis worker</h2>
+            <strong>
+              {data.worker.queued_jobs} queued · {data.worker.running_jobs}{" "}
+              running
+            </strong>
+            <p>Durable queue worker process consuming static analysis jobs.</p>
+          </section>
+          {Object.entries(data.adapters).map(([name, state]) => {
+            const value = typeof state === "string" ? state : state.status;
+            const description =
+              typeof state === "string"
+                ? state
+                : (state.reason ?? state.version ?? "");
+            return (
+              <section className="panel health-card" key={name}>
+                <Activity size={21} />
+                <h2>{statusLabel(name)}</h2>
+                <StatusPill value={value} />
+                <p>{description}</p>
+              </section>
+            );
+          })}
+        </div>
+      </section>
+
+      {capabilities && (
+        <section className="panel-group" style={{ marginTop: "24px" }}>
+          <h2 className="section-title">Reverse Engineering & Forensic Toolchain</h2>
+          <div className="toolchain-grid">
+            {Object.entries(capabilities.tools).map(([key, tool]) => (
+              <article className="panel toolchain-card" key={key}>
+                <div className="toolchain-card-header">
+                  <div>
+                    <span className="eyebrow">
+                      {(tool.category || "analysis_tool")
+                        .toUpperCase()
+                        .replaceAll("_", " ")}
+                    </span>
+                    <h3>{tool.name}</h3>
+                  </div>
+                  <StatusPill value={tool.status} />
+                </div>
+                {tool.version && (
+                  <p className="tool-version">
+                    <strong>Version:</strong> <code>{tool.version}</code>
+                  </p>
+                )}
+                {tool.path && (
+                  <p className="tool-path">
+                    <strong>Path:</strong> <code>{tool.path}</code>
+                  </p>
+                )}
+                <p className="tool-details">{tool.details}</p>
+                {tool.remediation && (
+                  <div className="tool-remediation">
+                    <strong>Setup guidance:</strong> {tool.remediation}
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
         </section>
-        <section className="panel health-card">
-          <Boxes size={21} />
-          <h2>Analysis worker</h2>
-          <strong>
-            {data.worker.queued_jobs} queued · {data.worker.running_jobs}{" "}
-            running
-          </strong>
-          <p>Start the separate worker process to consume persisted jobs.</p>
-        </section>
-        {Object.entries(data.adapters).map(([name, state]) => {
-          const value = typeof state === "string" ? state : state.status;
-          const description =
-            typeof state === "string"
-              ? state
-              : (state.reason ?? state.version ?? "");
-          return (
-            <section className="panel health-card" key={name}>
-              <Activity size={21} />
-              <h2>{statusLabel(name)}</h2>
-              <StatusPill value={value} />
-              <p>{description}</p>
-            </section>
-          );
-        })}
-      </div>
+      )}
     </>
   );
 }
@@ -1884,9 +2351,96 @@ function SamplesPage({ navigate }: { navigate: Navigate }) {
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
-    void api.samples(search).then((result) => setRecords(result.items)).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load samples"));
+    void api
+      .samples(search)
+      .then((result) => setRecords(result.items))
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error ? cause.message : "Could not load samples",
+        ),
+      );
   }, [search]);
-  return <><PageHeading title="APK library" description="Content-addressed samples are deduplicated by SHA-256 while each investigation remains a separate case." /><section className="panel"><div className="table-toolbar"><label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search filename or SHA-256" /></label><span className="table-count">{records?.length ?? "…"} samples</span></div>{error ? <ErrorPanel error={error} /> : !records ? <Loading /> : !records.length ? <EmptyState icon={Archive} title="No APK samples stored" message="Create an investigation to add a safely validated, hash-addressed sample." /> : <div className="table-wrap"><table className="case-table"><thead><tr><th>Sample</th><th>Cases</th><th>Evidence</th><th>First seen</th><th>Status</th><th /></tr></thead><tbody>{records.map((item) => <tr key={item.sha256}><td><strong>{item.original_filename}</strong><small><CopyToken value={item.sha256} /> · {fileSize(item.byte_size)} · {item.archive_entry_count} entries</small></td><td>{item.case_count}</td><td><span>{item.finding_count} findings</span><small>{item.blindspot_count} blindspots</small></td><td className="muted-cell">{dateTime(item.created_at)}</td><td><StatusPill value={item.latest_status} /></td><td><button className="row-open" onClick={() => navigate(`/app/cases/${item.latest_case_id}`)} aria-label={`Open ${item.latest_case_title}`}><ChevronRight size={17} /></button></td></tr>)}</tbody></table></div>}</section></>;
+  return (
+    <>
+      <PageHeading
+        title="APK library"
+        description="Content-addressed samples are deduplicated by SHA-256 while each investigation remains a separate case."
+      />
+      <section className="panel">
+        <div className="table-toolbar">
+          <label className="search-field">
+            <Search size={16} />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search filename or SHA-256"
+            />
+          </label>
+          <span className="table-count">{records?.length ?? "…"} samples</span>
+        </div>
+        {error ? (
+          <ErrorPanel error={error} />
+        ) : !records ? (
+          <Loading />
+        ) : !records.length ? (
+          <EmptyState
+            icon={Archive}
+            title="No APK samples stored"
+            message="Create an investigation to add a safely validated, hash-addressed sample."
+          />
+        ) : (
+          <div className="table-wrap">
+            <table className="case-table">
+              <thead>
+                <tr>
+                  <th>Sample</th>
+                  <th>Cases</th>
+                  <th>Evidence</th>
+                  <th>First seen</th>
+                  <th>Status</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {records.map((item) => (
+                  <tr key={item.sha256}>
+                    <td>
+                      <strong>{item.original_filename}</strong>
+                      <small>
+                        <CopyToken value={item.sha256} /> ·{" "}
+                        {fileSize(item.byte_size)} · {item.archive_entry_count}{" "}
+                        entries
+                      </small>
+                    </td>
+                    <td>{item.case_count}</td>
+                    <td>
+                      <span>{item.finding_count} findings</span>
+                      <small>{item.blindspot_count} blindspots</small>
+                    </td>
+                    <td className="muted-cell">{dateTime(item.created_at)}</td>
+                    <td>
+                      <StatusPill value={item.latest_status} />
+                    </td>
+                    <td>
+                      <button
+                        className="row-open"
+                        onClick={() =>
+                          navigate(`/app/cases/${item.latest_case_id}`)
+                        }
+                        aria-label={`Open ${item.latest_case_title}`}
+                      >
+                        <ChevronRight size={17} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
+  );
 }
 
 function IndicatorsPage({ navigate }: { navigate: Navigate }) {
@@ -1895,20 +2449,159 @@ function IndicatorsPage({ navigate }: { navigate: Navigate }) {
   const [type, setType] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
-    void api.indicators(search, type).then((result) => setRecords(result.items)).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load indicators"));
+    void api
+      .indicators(search, type)
+      .then((result) => setRecords(result.items))
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error ? cause.message : "Could not load indicators",
+        ),
+      );
   }, [search, type]);
-  return <><PageHeading title="Indicators / IoCs" description="Search static-string observations across investigations. These records are not runtime network observations." /><section className="panel"><div className="table-toolbar"><label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search an indicator value" /></label><select className="compact-select" value={type} onChange={(event) => setType(event.target.value)}><option value="">All types</option><option value="url">URL</option><option value="domain">Domain</option><option value="ip">IP address</option></select><span className="factual-note">Static strings only</span></div>{error ? <ErrorPanel error={error} /> : !records ? <Loading /> : !records.length ? <EmptyState icon={Network} title="No matching indicators" message="No persisted string observation matches this filter." /> : <div className="ioc-list">{records.map((item) => <button className="library-ioc" key={item.id} onClick={() => navigate(`/app/cases/${item.case_id}`)}><StatusPill value={item.observable_level} /><span className="ioc-type">{item.indicator_type}</span><code>{item.value}</code><span>{item.case_title}</span><ChevronRight size={15} /></button>)}</div>}</section></>;
+  return (
+    <>
+      <PageHeading
+        title="Indicators / IoCs"
+        description="Search static-string observations across investigations. These records are not runtime network observations."
+      />
+      <section className="panel">
+        <div className="table-toolbar">
+          <label className="search-field">
+            <Search size={16} />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search an indicator value"
+            />
+          </label>
+          <select
+            className="compact-select"
+            value={type}
+            onChange={(event) => setType(event.target.value)}
+          >
+            <option value="">All types</option>
+            <option value="url">URL</option>
+            <option value="domain">Domain</option>
+            <option value="ip">IP address</option>
+          </select>
+          <span className="factual-note">Static strings only</span>
+        </div>
+        {error ? (
+          <ErrorPanel error={error} />
+        ) : !records ? (
+          <Loading />
+        ) : !records.length ? (
+          <EmptyState
+            icon={Network}
+            title="No matching indicators"
+            message="No persisted string observation matches this filter."
+          />
+        ) : (
+          <div className="ioc-list">
+            {records.map((item) => (
+              <button
+                className="library-ioc"
+                key={item.id}
+                onClick={() => navigate(`/app/cases/${item.case_id}`)}
+              >
+                <StatusPill value={item.observable_level} />
+                <span className="ioc-type">{item.indicator_type}</span>
+                <code>{item.value}</code>
+                <span>{item.case_title}</span>
+                <ChevronRight size={15} />
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+    </>
+  );
 }
 
 function GlobalGraphPage() {
   const [cases, setCases] = useState<CaseRecord[] | null>(null);
   const [selected, setSelected] = useState("");
-  useEffect(() => { void api.cases().then((result) => { setCases(result.items); setSelected((current) => current || result.items[0]?.id || ""); }); }, []);
-  return <><PageHeading title="Evidence graph" description="Choose a case to inspect the bounded artifact-to-finding provenance neighborhood." />{!cases ? <Loading /> : !cases.length ? <EmptyState icon={GitBranch} title="No graph source cases" message="Create and process an investigation first." /> : <><section className="panel selector-panel"><label>Investigation<select value={selected} onChange={(event) => setSelected(event.target.value)}>{cases.map((item) => <option value={item.id} key={item.id}>{item.title} · {shortHash(item.sample_sha256)}</option>)}</select></label></section>{selected && <GraphTab caseId={selected} />}</>}</>;
+  useEffect(() => {
+    void api.cases().then((result) => {
+      setCases(result.items);
+      setSelected((current) => current || result.items[0]?.id || "");
+    });
+  }, []);
+  return (
+    <>
+      <PageHeading
+        title="Evidence graph"
+        description="Choose a case to inspect the bounded artifact-to-finding provenance neighborhood."
+      />
+      {!cases ? (
+        <Loading />
+      ) : !cases.length ? (
+        <EmptyState
+          icon={GitBranch}
+          title="No graph source cases"
+          message="Create and process an investigation first."
+        />
+      ) : (
+        <>
+          <section className="panel selector-panel">
+            <label>
+              Investigation
+              <select
+                value={selected}
+                onChange={(event) => setSelected(event.target.value)}
+              >
+                {cases.map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.title} · {shortHash(item.sample_sha256)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </section>
+          {selected && <GraphTab caseId={selected} />}
+        </>
+      )}
+    </>
+  );
 }
 
-function DiffGroup({ title, values }: { title: string; values: { shared: string[]; left_only: string[]; right_only: string[] } }) {
-  return <section className="panel diff-panel"><div className="panel-heading"><div><p className="eyebrow">STATIC DIFFERENCE</p><h2>{title}</h2></div></div><div className="diff-columns"><div><strong>Shared · {values.shared.length}</strong>{values.shared.map((value) => <code key={value}>{value}</code>)}</div><div><strong>Left only · {values.left_only.length}</strong>{values.left_only.map((value) => <code key={value}>{value}</code>)}</div><div><strong>Right only · {values.right_only.length}</strong>{values.right_only.map((value) => <code key={value}>{value}</code>)}</div></div></section>;
+function DiffGroup({
+  title,
+  values,
+}: {
+  title: string;
+  values: { shared: string[]; left_only: string[]; right_only: string[] };
+}) {
+  return (
+    <section className="panel diff-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">STATIC DIFFERENCE</p>
+          <h2>{title}</h2>
+        </div>
+      </div>
+      <div className="diff-columns">
+        <div>
+          <strong>Shared · {values.shared.length}</strong>
+          {values.shared.map((value) => (
+            <code key={value}>{value}</code>
+          ))}
+        </div>
+        <div>
+          <strong>Left only · {values.left_only.length}</strong>
+          {values.left_only.map((value) => (
+            <code key={value}>{value}</code>
+          ))}
+        </div>
+        <div>
+          <strong>Right only · {values.right_only.length}</strong>
+          {values.right_only.map((value) => (
+            <code key={value}>{value}</code>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function ComparePage() {
@@ -1917,34 +2610,748 @@ function ComparePage() {
   const [right, setRight] = useState("");
   const [result, setResult] = useState<Comparison | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => { void api.cases().then((response) => { setCases(response.items); setLeft(response.items[0]?.id ?? ""); setRight(response.items[1]?.id ?? response.items[0]?.id ?? ""); }); }, []);
-  async function compare() { setError(""); try { setResult(await api.compare(left, right)); } catch (cause) { setError(cause instanceof Error ? cause.message : "Comparison failed"); } }
-  return <><PageHeading title="Case comparison" description="Compare deterministic finding rules and static indicators without inferring family or actor attribution." />{!cases ? <Loading /> : cases.length < 2 ? <EmptyState icon={ArrowLeftRight} title="Two investigations are required" message="Create at least two cases before using comparison." /> : <><section className="panel compare-controls"><label>Left case<select value={left} onChange={(event) => setLeft(event.target.value)}>{cases.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><ArrowLeftRight size={20} /><label>Right case<select value={right} onChange={(event) => setRight(event.target.value)}>{cases.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><button className="primary-button" disabled={left === right} onClick={() => void compare()}>Compare evidence</button></section>{error && <ErrorPanel error={error} />}{result && <><div className="privacy-note"><CircleHelp size={17} /><p>{result.limitation}</p></div><DiffGroup title="Finding rules" values={result.finding_rules} />{Object.entries(result.indicator_diff).map(([kind, values]) => <DiffGroup title={`${kind.toUpperCase()} indicators`} values={values} key={kind} />)}</>}</>}</>;
+  useEffect(() => {
+    void api.cases().then((response) => {
+      setCases(response.items);
+      setLeft(response.items[0]?.id ?? "");
+      setRight(response.items[1]?.id ?? response.items[0]?.id ?? "");
+    });
+  }, []);
+  async function compare() {
+    setError("");
+    try {
+      setResult(await api.compare(left, right));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Comparison failed");
+    }
+  }
+  return (
+    <>
+      <PageHeading
+        title="Case comparison"
+        description="Compare deterministic finding rules and static indicators without inferring family or actor attribution."
+      />
+      {!cases ? (
+        <Loading />
+      ) : cases.length < 2 ? (
+        <EmptyState
+          icon={ArrowLeftRight}
+          title="Two investigations are required"
+          message="Create at least two cases before using comparison."
+        />
+      ) : (
+        <>
+          <section className="panel compare-controls">
+            <label>
+              Left case
+              <select
+                value={left}
+                onChange={(event) => setLeft(event.target.value)}
+              >
+                {cases.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <ArrowLeftRight size={20} />
+            <label>
+              Right case
+              <select
+                value={right}
+                onChange={(event) => setRight(event.target.value)}
+              >
+                {cases.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="primary-button"
+              disabled={left === right}
+              onClick={() => void compare()}
+            >
+              Compare evidence
+            </button>
+          </section>
+          {error && <ErrorPanel error={error} />}
+          {result && (
+            <>
+              <div className="privacy-note">
+                <CircleHelp size={17} />
+                <p>{result.limitation}</p>
+              </div>
+              <DiffGroup title="Finding rules" values={result.finding_rules} />
+              {Object.entries(result.indicator_diff).map(([kind, values]) => (
+                <DiffGroup
+                  title={`${kind.toUpperCase()} indicators`}
+                  values={values}
+                  key={kind}
+                />
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
 }
 
 function SettingsPage() {
   const [settingsData, setSettingsData] = useState<AppSettings | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
-  const [profile, setProfile] = useState<"lite" | "standard" | "advanced">("standard");
+  const [profile, setProfile] = useState<"lite" | "standard" | "advanced">(
+    "standard",
+  );
   const [message, setMessage] = useState("");
-  useEffect(() => { void api.settings().then((data) => { setSettingsData(data); setProfile(data.values.default_profile); }); void api.audit().then((data) => setAuditEvents(data.items)); }, []);
-  async function save() { const data = await api.saveSettings(profile); setSettingsData(data); setMessage("Saved as the default for new investigations."); }
-  return <><PageHeading title="Settings" description="Only persisted, validated controls that affect implemented behavior are editable." />{!settingsData ? <Loading /> : <div className="settings-grid"><section className="panel"><div className="panel-heading"><div><p className="eyebrow">ANALYSIS DEFAULTS</p><h2>New investigation profile</h2></div></div><div className="field-grid"><label className="full-width">Default profile<select value={profile} onChange={(event) => setProfile(event.target.value as typeof profile)}><option value="lite">Lite</option><option value="standard">Standard</option><option value="advanced">Advanced</option></select></label></div><div className="form-actions"><span className="saved-message">{message}</span><button className="primary-button" onClick={() => void save()}>Save setting</button></div></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">ENFORCED BOUNDARIES</p><h2>Service capabilities</h2></div></div><div className="review-list"><div><span>Data mode</span><StatusPill value={settingsData.capabilities.data_mode} /></div><div><span>Upload limit</span><strong>{fileSize(settingsData.capabilities.max_upload_bytes)}</strong></div><div><span>NVIDIA provider</span><StatusPill value={settingsData.capabilities.nvidia} /></div><div><span>Dynamic lab</span><StatusPill value={settingsData.capabilities.dynamic_lab} /></div></div></section><section className="panel audit-panel"><div className="panel-heading"><div><p className="eyebrow">AUDIT TRAIL</p><h2>Recent security and analyst actions</h2></div></div><div className="event-list">{auditEvents.map((event) => <div className="event" key={event.id}><span /><div><strong>{statusLabel(event.action)} · {event.subject_type}</strong><small>{event.username ?? "system"} · {dateTime(event.created_at)}</small></div></div>)}</div></section></div>}</>;
+  useEffect(() => {
+    void api.settings().then((data) => {
+      setSettingsData(data);
+      setProfile(data.values.default_profile);
+    });
+    void api.audit().then((data) => setAuditEvents(data.items));
+  }, []);
+  async function save() {
+    const data = await api.saveSettings(profile);
+    setSettingsData(data);
+    setMessage("Saved as the default for new investigations.");
+  }
+  return (
+    <>
+      <PageHeading
+        title="Settings"
+        description="Only persisted, validated controls that affect implemented behavior are editable."
+      />
+      {!settingsData ? (
+        <Loading />
+      ) : (
+        <div className="settings-grid">
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">ANALYSIS DEFAULTS</p>
+                <h2>New investigation profile</h2>
+              </div>
+            </div>
+            <div className="field-grid">
+              <label className="full-width">
+                Default profile
+                <select
+                  value={profile}
+                  onChange={(event) =>
+                    setProfile(event.target.value as typeof profile)
+                  }
+                >
+                  <option value="lite">Lite</option>
+                  <option value="standard">Standard</option>
+                  <option value="advanced">Advanced</option>
+                </select>
+              </label>
+            </div>
+            <div className="form-actions">
+              <span className="saved-message">{message}</span>
+              <button className="primary-button" onClick={() => void save()}>
+                Save setting
+              </button>
+            </div>
+          </section>
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">ENFORCED BOUNDARIES</p>
+                <h2>Service capabilities</h2>
+              </div>
+            </div>
+            <div className="review-list">
+              <div>
+                <span>Data mode</span>
+                <StatusPill value={settingsData.capabilities.data_mode} />
+              </div>
+              <div>
+                <span>Upload limit</span>
+                <strong>
+                  {fileSize(settingsData.capabilities.max_upload_bytes)}
+                </strong>
+              </div>
+              <div>
+                <span>NVIDIA provider</span>
+                <StatusPill value={settingsData.capabilities.nvidia} />
+              </div>
+              <div>
+                <span>NVIDIA model</span>
+                <strong>{settingsData.capabilities.nvidia_model ?? "Disabled"}</strong>
+              </div>
+              <div>
+                <span>Dynamic lab</span>
+                <StatusPill value={settingsData.capabilities.dynamic_lab} />
+              </div>
+            </div>
+          </section>
+          <section className="panel audit-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">AUDIT TRAIL</p>
+                <h2>Recent security and analyst actions</h2>
+              </div>
+            </div>
+            <div className="event-list">
+              {auditEvents.map((event) => (
+                <div className="event" key={event.id}>
+                  <span />
+                  <div>
+                    <strong>
+                      {statusLabel(event.action)} · {event.subject_type}
+                    </strong>
+                    <small>
+                      {event.username ?? "system"} ·{" "}
+                      {dateTime(event.created_at)}
+                    </small>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+    </>
+  );
 }
 
-function AuthPage({ bootstrap, onAuthenticated }: { bootstrap: boolean; onAuthenticated: (user: AuthUser) => void }) {
+function AssistantText({ content }: { content: string }) {
+  return (
+    <div className="assistant-text">
+      {content.split("\n").map((line, lineIndex) => {
+        const parts = line.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+        return (
+          <p key={`${lineIndex}-${line.slice(0, 24)}`}>
+            {parts.map((part, partIndex) => {
+              if (part.startsWith("`") && part.endsWith("`")) {
+                return <code key={partIndex}>{part.slice(1, -1)}</code>;
+              }
+              if (part.startsWith("**") && part.endsWith("**")) {
+                return <strong key={partIndex}>{part.slice(2, -2)}</strong>;
+              }
+              return <span key={partIndex}>{part}</span>;
+            })}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function AssistantMessageCard({
+  message,
+  navigate,
+}: {
+  message: AssistantMessage;
+  navigate: Navigate;
+}) {
+  const toolRuns = message.tool_runs.filter((run) => run.tool !== "nvidia_nim");
+  return (
+    <article className={`assistant-message ${message.role}`}>
+      <div className="assistant-message-avatar">
+        {message.role === "assistant" ? <Bot size={17} /> : "YOU"}
+      </div>
+      <div className="assistant-message-body">
+        <div className="assistant-message-meta">
+          <strong>{message.role === "assistant" ? "NEXUS" : "Analyst"}</strong>
+          <span>{dateTime(message.created_at)}</span>
+          {message.role === "assistant" && <StatusPill value={message.mode} />}
+        </div>
+        <AssistantText content={message.content} />
+        {toolRuns.length > 0 && (
+          <details className="assistant-tool-trace">
+            <summary>
+              <Wrench size={13} /> {toolRuns.length} backend tool
+              {toolRuns.length === 1 ? "" : "s"} consulted
+            </summary>
+            <div>
+              {toolRuns.map((run, index) => (
+                <article key={`${run.tool}-${index}`}>
+                  <strong>{statusLabel(run.tool)}</strong>
+                  {run.error ? (
+                    <span className="assistant-tool-error">{run.error}</span>
+                  ) : (
+                    <pre>{JSON.stringify(run.data ?? {}, null, 2)}</pre>
+                  )}
+                </article>
+              ))}
+            </div>
+          </details>
+        )}
+        {message.citations.length > 0 && (
+          <div className="assistant-citations">
+            <span>Evidence anchors</span>
+            {message.citations.slice(0, 18).map((citation) => (
+              <button
+                key={`${citation.kind}-${citation.id}`}
+                onClick={() => citation.href && navigate(citation.href)}
+                disabled={!citation.href}
+                title={citation.id}
+              >
+                {citation.kind} · {citation.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function AssistantPage({
+  navigate,
+  initialCaseId,
+}: {
+  navigate: Navigate;
+  initialCaseId?: string;
+}) {
+  const [threads, setThreads] = useState<AssistantThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState("");
+  const [detail, setDetail] = useState<AssistantThreadDetail | null>(null);
+  const [cases, setCases] = useState<CaseRecord[]>([]);
+  const [selectedCase, setSelectedCase] = useState(initialCaseId ?? "");
+  const [tools, setTools] = useState<AssistantToolsResponse | null>(null);
+  const [question, setQuestion] = useState("");
+  const [useCloud, setUseCloud] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setSelectedCase(initialCaseId ?? "");
+    void Promise.all([
+      api.assistantThreads(),
+      api.cases(""),
+      api.assistantTools(),
+    ])
+      .then(([threadResponse, caseResponse, toolResponse]) => {
+        setThreads(threadResponse.items);
+        setCases(caseResponse.items);
+        setTools(toolResponse);
+        const preferred = initialCaseId
+          ? threadResponse.items.find((thread) => thread.case_id === initialCaseId)
+          : threadResponse.items[0];
+        if (preferred) {
+          setActiveThreadId(preferred.id);
+          return api.assistantThread(preferred.id).then(setDetail);
+        }
+        setActiveThreadId("");
+        setDetail(null);
+        return undefined;
+      })
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not load the assistant workspace",
+        ),
+      );
+  }, [initialCaseId]);
+
+  async function refreshThreads(preferId?: string) {
+    const response = await api.assistantThreads();
+    setThreads(response.items);
+    if (preferId) {
+      setActiveThreadId(preferId);
+      setDetail(await api.assistantThread(preferId));
+    }
+  }
+
+  async function openThread(threadId: string) {
+    setError("");
+    setActiveThreadId(threadId);
+    try {
+      const response = await api.assistantThread(threadId);
+      setDetail(response);
+      setSelectedCase(response.thread.case_id ?? "");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not open thread");
+    }
+  }
+
+  async function newThread() {
+    setBusy(true);
+    setError("");
+    try {
+      const created = await api.createAssistantThread(selectedCase || null);
+      await refreshThreads(created.thread.id);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Could not create conversation",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitQuestion(event: FormEvent) {
+    event.preventDefault();
+    const content = question.trim();
+    if (!content || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      let threadId = activeThreadId;
+      if (!threadId) {
+        const created = await api.createAssistantThread(selectedCase || null);
+        threadId = created.thread.id;
+        setActiveThreadId(threadId);
+      }
+      setQuestion("");
+      await api.askAssistant(threadId, content, useCloud);
+      await refreshThreads(threadId);
+    } catch (cause) {
+      setQuestion(content);
+      setError(cause instanceof Error ? cause.message : "Assistant request failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const cloudConfigured = tools?.modes.nvidia_nim === "configured";
+  const activeCase = cases.find(
+    (item) => item.id === (detail?.thread.case_id ?? selectedCase),
+  );
+  const suggestions = activeCase
+    ? [
+        "Summarize this case and separate risk from analysis completeness.",
+        "Which blindspots matter most and what should I inspect next?",
+        "Show the evidence-backed findings and their limitations.",
+        "Are there guarded paths or solver witnesses in this case?",
+      ]
+    : [
+        "What analysis tools and capabilities are available right now?",
+        "List my persisted investigations.",
+      ];
+
+  return (
+    <>
+      <PageHeading
+        title="NEXUS analyst assistant"
+        description="Ask evidence-grounded questions. Every case answer is produced through allowlisted backend tools and preserves observed, reachable, suspected, and unknown states."
+      >
+        <button className="secondary-button" onClick={() => void newThread()}>
+          <Plus size={16} /> New conversation
+        </button>
+      </PageHeading>
+      {error && <ErrorPanel error={error} />}
+      <div className="assistant-layout">
+        <aside className="panel assistant-sidebar">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">CONVERSATIONS</p>
+              <h2>Evidence sessions</h2>
+            </div>
+            <Bot size={18} />
+          </div>
+          <label className="assistant-case-picker">
+            Case context for a new thread
+            <select
+              value={selectedCase}
+              onChange={(event) => setSelectedCase(event.target.value)}
+            >
+              <option value="">Workspace / no case</option>
+              {cases.map((item) => (
+                <option value={item.id} key={item.id}>
+                  {item.title} · {shortHash(item.sample_sha256)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="assistant-thread-list">
+            {threads.map((thread) => (
+              <button
+                className={thread.id === activeThreadId ? "active" : ""}
+                onClick={() => void openThread(thread.id)}
+                key={thread.id}
+              >
+                <span>{thread.title}</span>
+                <small>
+                  {thread.message_count ?? 0} messages · {dateTime(thread.updated_at)}
+                </small>
+              </button>
+            ))}
+            {!threads.length && (
+              <p className="quiet-message">No conversations yet.</p>
+            )}
+          </div>
+          {tools && (
+            <details className="assistant-tool-catalog">
+              <summary>
+                <Wrench size={14} /> {tools.items.length} available assistant tools
+              </summary>
+              <div>
+                {tools.items.map((tool) => (
+                  <article key={tool.name}>
+                    <code>{tool.name}</code>
+                    <p>{tool.description}</p>
+                  </article>
+                ))}
+              </div>
+            </details>
+          )}
+        </aside>
+
+        <section className="panel assistant-chat">
+          <div className="assistant-chat-header">
+            <div>
+              <p className="eyebrow">READ-ONLY FORENSIC COPILOT</p>
+              <h2>{detail?.thread.title ?? "Start an evidence question"}</h2>
+              <span>
+                {activeCase
+                  ? `Case context: ${activeCase.title}`
+                  : "Workspace context — select a case for evidence questions"}
+              </span>
+            </div>
+            <div className="assistant-safety-state">
+              <ShieldCheck size={16} />
+              <span>No shell · no APK execution · no arbitrary URLs</span>
+            </div>
+          </div>
+          <div className="assistant-messages" aria-live="polite">
+            {!detail?.messages.length ? (
+              <div className="assistant-welcome">
+                <span><Bot size={24} /></span>
+                <h2>Ask the evidence, not a black box</h2>
+                <p>
+                  Local mode answers through real SQLite evidence queries even without
+                  cloud credentials. Optional NVIDIA mode can reason over redacted tool
+                  results only when you explicitly enable it.
+                </p>
+                <div>
+                  {suggestions.map((suggestion) => (
+                    <button onClick={() => setQuestion(suggestion)} key={suggestion}>
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              detail.messages.map((message) => (
+                <AssistantMessageCard
+                  message={message}
+                  navigate={navigate}
+                  key={message.id}
+                />
+              ))
+            )}
+            {busy && (
+              <div className="assistant-thinking">
+                <LoaderCircle className="spin" size={16} /> Consulting backend tools…
+              </div>
+            )}
+          </div>
+          <form className="assistant-composer" onSubmit={submitQuestion}>
+            <textarea
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder={
+                activeCase
+                  ? "Ask about findings, blindspots, paths, IoCs, artifacts, jobs, or reports…"
+                  : "Ask what the system can do, or select a case…"
+              }
+              maxLength={4000}
+              rows={3}
+            />
+            <div>
+              <label
+                className={`assistant-cloud-toggle ${useCloud ? "enabled" : ""}`}
+                title={
+                  cloudConfigured
+                    ? "Sends your question and minimized, redacted tool outputs to the configured NVIDIA provider"
+                    : "NVIDIA provider is not configured"
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={useCloud}
+                  disabled={!cloudConfigured}
+                  onChange={(event) => setUseCloud(event.target.checked)}
+                />
+                <Cloud size={15} />
+                {cloudConfigured ? "Use NVIDIA for this response" : "NVIDIA not configured"}
+              </label>
+              <span>{question.length}/4000</span>
+              <button
+                className="primary-button"
+                disabled={!question.trim() || busy}
+                aria-label="Send question"
+              >
+                {busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+                Ask NEXUS
+              </button>
+            </div>
+            {useCloud && (
+              <p className="assistant-cloud-warning">
+                Cloud mode sends this question plus minimized tool results. Raw APK
+                bytes, raw artifact payloads, case notes, and raw IoC values from backend
+                tool output are excluded. Do not type sensitive data into the question.
+              </p>
+            )}
+          </form>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function AuthPage({
+  bootstrap,
+  onAuthenticated,
+}: {
+  bootstrap: boolean;
+  onAuthenticated: (user: AuthUser) => void;
+}) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent) { event.preventDefault(); if (bootstrap && password !== confirm) { setError("Passwords do not match."); return; } setBusy(true); setError(""); try { const result = bootstrap ? await api.bootstrap(username, password) : await api.login(username, password); onAuthenticated(result.user); } catch (cause) { setError(cause instanceof Error ? cause.message : "Authentication failed"); } finally { setBusy(false); } }
-  return <main className="auth-screen"><section className="auth-card panel"><div className="auth-brand"><span className="brand-mark"><i /><i /></span><div><strong>SHADOWPATH Ω</strong><span>NEXUS</span></div></div><p className="eyebrow">{bootstrap ? "FIRST-RUN SECURITY" : "LOCAL ANALYST ACCESS"}</p><h1>{bootstrap ? "Create the administrator" : "Sign in to the workspace"}</h1><p className="page-description">{bootstrap ? "This account protects all case evidence, settings, and report downloads on this installation." : "Use the local account created for this installation."}</p><form onSubmit={submit} className="auth-form"><label>Username<input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={40} autoComplete="username" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={12} maxLength={256} autoComplete={bootstrap ? "new-password" : "current-password"} required /></label>{bootstrap && <label>Confirm password<input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} minLength={12} autoComplete="new-password" required /></label>}{error && <ErrorPanel error={error} />}<button className="primary-button" disabled={busy}>{busy && <LoaderCircle className="spin" size={16} />}{bootstrap ? "Secure this installation" : "Sign in"}</button></form><div className="privacy-note"><LockKeyhole size={17} /><p>Passwords are stored as salted PBKDF2 hashes. Sessions expire after 12 hours.</p></div></section></main>;
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (bootstrap && password !== confirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = bootstrap
+        ? await api.bootstrap(username, password)
+        : await api.login(username, password);
+      onAuthenticated(result.user);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Authentication failed",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <main className="auth-screen">
+      <section className="auth-context" aria-label="Product capabilities">
+        <div className="auth-brand">
+          <span className="brand-mark">
+            <i />
+            <i />
+          </span>
+          <div>
+            <strong>SHADOWPATH Ω</strong>
+            <span>NEXUS / FORENSIC OPERATIONS</span>
+          </div>
+        </div>
+        <div className="auth-context-copy">
+          <p className="eyebrow">ANDROID EVIDENCE INTELLIGENCE</p>
+          <h2>See what the scan did not.</h2>
+          <p>
+            Coverage-aware APK analysis, guarded-path reconstruction, and
+            independently verifiable evidence—kept inside a bounded analyst workflow.
+          </p>
+        </div>
+        <div className="auth-capability-list">
+          <div>
+            <span><FileSearch size={17} /></span>
+            <p><strong>Static evidence plane</strong><small>APK, manifest, DEX, certificate and indicator inventory</small></p>
+          </div>
+          <div>
+            <span><GitBranch size={17} /></span>
+            <p><strong>Blindspot intelligence</strong><small>Explicit unresolved paths, unsupported semantics and coverage gaps</small></p>
+          </div>
+          <div>
+            <span><ShieldCheck size={17} /></span>
+            <p><strong>Forensic integrity</strong><small>Evidence-linked findings and independently verifiable capsules</small></p>
+          </div>
+        </div>
+        <div className="auth-boundary-strip">
+          <span><i /> LOCAL-FIRST</span>
+          <span>HOST EXECUTION DISABLED</span>
+        </div>
+      </section>
+      <section className="auth-card panel">
+        <p className="eyebrow">
+          {bootstrap ? "FIRST-RUN SECURITY" : "LOCAL ANALYST ACCESS"}
+        </p>
+        <h1>
+          {bootstrap ? "Create the administrator" : "Sign in to the workspace"}
+        </h1>
+        <p className="page-description">
+          {bootstrap
+            ? "This account protects all case evidence, settings, and report downloads on this installation."
+            : "Use the local account created for this installation."}
+        </p>
+        <form onSubmit={submit} className="auth-form">
+          <label>
+            Username
+            <input
+              autoFocus
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              minLength={3}
+              maxLength={40}
+              autoComplete="username"
+              required
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              minLength={5}
+              maxLength={256}
+              autoComplete={bootstrap ? "new-password" : "current-password"}
+              required
+            />
+          </label>
+          {bootstrap && (
+            <label>
+              Confirm password
+              <input
+                type="password"
+                value={confirm}
+                onChange={(event) => setConfirm(event.target.value)}
+                minLength={5}
+                autoComplete="new-password"
+                required
+              />
+            </label>
+          )}
+          {error && <ErrorPanel error={error} />}
+          <button className="primary-button" disabled={busy}>
+            {busy && <LoaderCircle className="spin" size={16} />}
+            {bootstrap ? "Secure this installation" : "Sign in"}
+          </button>
+        </form>
+        <div className="privacy-note">
+          <LockKeyhole size={17} />
+          <p>
+            Passwords are stored as salted PBKDF2 hashes. Sessions expire after
+            12 hours.
+          </p>
+        </div>
+      </section>
+    </main>
+  );
 }
 
 function Route({ path, navigate }: { path: string; navigate: Navigate }) {
   if (path === "/app/overview" || path === "/")
     return <OverviewPage navigate={navigate} />;
+  if (path === "/app/assistant")
+    return <AssistantPage navigate={navigate} />;
+  if (path.startsWith("/app/assistant/case/"))
+    return (
+      <AssistantPage
+        navigate={navigate}
+        initialCaseId={path.split("/").pop()!}
+      />
+    );
   if (path === "/app/scans/new")
     return <NewInvestigationPage navigate={navigate} />;
   if (path === "/app/cases") return <CasesPage navigate={navigate} />;
@@ -1960,18 +3367,58 @@ function Route({ path, navigate }: { path: string; navigate: Navigate }) {
   if (path === "/app/reports") return <ReportsPage />;
   if (path === "/app/health") return <HealthPage />;
   if (path === "/app/settings") return <SettingsPage />;
-  return <EmptyState title="Workspace not found" message="Use the navigation to open an implemented analyst workflow." />;
+  return (
+    <EmptyState
+      title="Workspace not found"
+      message="Use the navigation to open an implemented analyst workflow."
+    />
+  );
 }
 
 export function App() {
   const [path, navigate] = usePath();
   const [theme, toggleTheme] = useTheme();
-  const [auth, setAuth] = useState<{ loading: boolean; bootstrap: boolean; user: AuthUser | null }>({ loading: true, bootstrap: false, user: null });
-  const refreshAuth = () => api.authStatus().then((status) => setAuth({ loading: false, bootstrap: status.bootstrap_required, user: status.user })).catch(() => setAuth({ loading: false, bootstrap: false, user: null }));
-  useEffect(() => { void refreshAuth(); const expired = () => void refreshAuth(); window.addEventListener("shadowpath-auth-expired", expired); return () => window.removeEventListener("shadowpath-auth-expired", expired); }, []);
-  async function logout() { await api.logout(); setAuth((current) => ({ ...current, user: null })); }
-  if (auth.loading) return <main className="auth-screen"><Loading /></main>;
-  if (!auth.user) return <AuthPage bootstrap={auth.bootstrap} onAuthenticated={(user) => setAuth({ loading: false, bootstrap: false, user })} />;
+  const [auth, setAuth] = useState<{
+    loading: boolean;
+    bootstrap: boolean;
+    user: AuthUser | null;
+  }>({ loading: true, bootstrap: false, user: null });
+  const refreshAuth = () =>
+    api
+      .authStatus()
+      .then((status) =>
+        setAuth({
+          loading: false,
+          bootstrap: status.bootstrap_required,
+          user: status.user,
+        }),
+      )
+      .catch(() => setAuth({ loading: false, bootstrap: false, user: null }));
+  useEffect(() => {
+    void refreshAuth();
+    const expired = () => void refreshAuth();
+    window.addEventListener("shadowpath-auth-expired", expired);
+    return () => window.removeEventListener("shadowpath-auth-expired", expired);
+  }, []);
+  async function logout() {
+    await api.logout();
+    setAuth((current) => ({ ...current, user: null }));
+  }
+  if (auth.loading)
+    return (
+      <main className="auth-screen">
+        <Loading />
+      </main>
+    );
+  if (!auth.user)
+    return (
+      <AuthPage
+        bootstrap={auth.bootstrap}
+        onAuthenticated={(user) =>
+          setAuth({ loading: false, bootstrap: false, user })
+        }
+      />
+    );
   return (
     <AppShell
       path={path}

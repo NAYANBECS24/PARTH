@@ -1,0 +1,11 @@
+{
+  "fixture": "hello_world",
+  "synthetic": true,
+  "expected": {
+    "manifest_parsed": true,
+    "findings_count": 0,
+    "runtime_maliciousness_claim": false
+  },
+  "notes": "Benign hello world app with no sensitive declarations.",
+  "apk_sha256": "6674733b0cb9950fb634095ecb4c8be38ba9e20013fee194c7f29532bdeb31d8"
+}

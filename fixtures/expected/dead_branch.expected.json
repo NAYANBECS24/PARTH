@@ -1,0 +1,11 @@
+{
+  "fixture": "dead_branch",
+  "synthetic": true,
+  "expected": {
+    "guard_class": "contradictory_bounds",
+    "solver_status": "unsat",
+    "evidence_status": "observed"
+  },
+  "notes": "Unsatisfiable dead code branch proven UNSAT by Z3.",
+  "apk_sha256": "83a261bd60f4af2a0f0d946a6b8954b5287064e14465acaee0fc4632aefab21b"
+}

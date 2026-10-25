@@ -1,8 +1,14 @@
 import type {
+  AIProposal,
+  AssistantMessage,
+  AssistantThread,
+  AssistantTool,
   Artifact,
   Blindspot,
+  CapabilitiesMap,
   CaseRecord,
   Finding,
+  GuardPath,
   Indicator,
   Job,
   JobEvent,
@@ -10,7 +16,12 @@ import type {
   ReportRecord,
 } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
+const API_BASE =
+  import.meta.env.VITE_API_BASE !== undefined
+    ? import.meta.env.VITE_API_BASE
+    : import.meta.env.DEV
+      ? "http://127.0.0.1:8000"
+      : "";
 const TOKEN_KEY = "shadowpath-session";
 
 export class ApiError extends Error {
@@ -86,8 +97,10 @@ export interface CaseDetail {
   artifacts: Artifact[];
   findings: Finding[];
   blindspots: Blindspot[];
+  guard_paths?: GuardPath[];
   indicators: Indicator[];
   reports: ReportRecord[];
+  ai_proposals: AIProposal[];
 }
 
 export interface JobDetail {
@@ -133,6 +146,7 @@ export interface AppSettings {
     data_mode: string;
     max_upload_bytes: number;
     nvidia: string;
+    nvidia_model: string | null;
     dynamic_lab: string;
   };
 }
@@ -158,6 +172,21 @@ export interface AuditEvent {
   subject_id: string | null;
   detail: Record<string, unknown>;
   created_at: string;
+}
+
+export interface AssistantThreadDetail {
+  thread: AssistantThread;
+  messages: AssistantMessage[];
+}
+
+export interface AssistantToolsResponse {
+  items: AssistantTool[];
+  execution_policy: string;
+  forbidden: string[];
+  modes: {
+    local_deterministic: string;
+    nvidia_nim: string;
+  };
 }
 
 export const api = {
@@ -291,4 +320,32 @@ export const api = {
     anchor.click();
     URL.revokeObjectURL(url);
   },
+  capabilities: () => request<CapabilitiesMap>("/api/capabilities"),
+  paths: (caseId: string) =>
+    request<{ items: GuardPath[]; total: number }>(`/api/cases/${caseId}/paths`),
+  assistantTools: () =>
+    request<AssistantToolsResponse>("/api/assistant/tools"),
+  assistantThreads: (caseId = "") =>
+    request<{ items: AssistantThread[] }>(
+      `/api/assistant/threads${caseId ? `?case_id=${encodeURIComponent(caseId)}` : ""}`,
+    ),
+  assistantThread: (threadId: string) =>
+    request<AssistantThreadDetail>(`/api/assistant/threads/${threadId}`),
+  createAssistantThread: (caseId: string | null, title = "New investigation question") =>
+    request<{ thread: AssistantThread }>("/api/assistant/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ case_id: caseId, title }),
+    }),
+  askAssistant: (threadId: string, content: string, useCloud: boolean) =>
+    request<{
+      thread_id: string;
+      user_message: AssistantMessage;
+      assistant_message: AssistantMessage;
+      provider: { mode: string; model: string | null; cloud_data_sent: boolean };
+    }>(`/api/assistant/threads/${threadId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, use_cloud: useCloud }),
+    }),
 };

@@ -45,8 +45,8 @@ def verify_password(password: str, encoded: str) -> bool:
 def validate_credentials(username: str, password: str) -> None:
     if not USERNAME_PATTERN.fullmatch(username):
         raise ValueError("Username must be 3–40 characters using letters, numbers, dot, dash, or underscore")
-    if len(password) < 12 or len(password) > 256:
-        raise ValueError("Password must be between 12 and 256 characters")
+    if len(password) < 5 or len(password) > 256:
+        raise ValueError("Password must be between 5 and 256 characters")
 
 
 def bootstrap_required() -> bool:

@@ -150,6 +150,32 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS guard_paths (
+  id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  target_method_id TEXT NOT NULL,
+  guard_ast_json TEXT NOT NULL,
+  solver_status TEXT NOT NULL CHECK(solver_status IN ('sat', 'unsat', 'unknown', 'unsupported', 'timeout')),
+  supported_subset INTEGER NOT NULL,
+  witness_json TEXT NOT NULL DEFAULT '{}',
+  limitations_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_proposals (
+  id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('generated', 'validation_failed', 'rate_limited', 'temporarily_unavailable', 'failed')),
+  proposal_json TEXT NOT NULL DEFAULT '{}',
+  validation_errors_json TEXT NOT NULL DEFAULT '[]',
+  evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -184,6 +210,26 @@ CREATE TABLE IF NOT EXISTS audit_events (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS assistant_threads (
+  id TEXT PRIMARY KEY,
+  case_id TEXT REFERENCES cases(id) ON DELETE SET NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS assistant_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES assistant_threads(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK(mode IN ('user', 'local_deterministic', 'nvidia_nim', 'local_fallback')),
+  citations_json TEXT NOT NULL DEFAULT '[]',
+  tool_runs_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_cases_created_at ON cases(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_artifacts_case ON artifacts(case_id, artifact_type);
@@ -191,6 +237,10 @@ CREATE INDEX IF NOT EXISTS idx_findings_case ON findings(case_id, severity);
 CREATE INDEX IF NOT EXISTS idx_blindspots_case ON blindspots(case_id, reason_code);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash, expires_at);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_proposals_case ON ai_proposals(case_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_guard_paths_case ON guard_paths(case_id, solver_status);
+CREATE INDEX IF NOT EXISTS idx_assistant_threads_user ON assistant_threads(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assistant_messages_thread ON assistant_messages(thread_id, created_at);
 """
 
 

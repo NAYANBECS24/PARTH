@@ -30,3 +30,25 @@ runtime or AI findings. NVIDIA reasoning remains disabled unless explicitly conf
 Reports are generated from persisted data. A capsule includes a canonical JSON report
 and a hash manifest; verification recalculates the chain without an AI service.
 
+## ADR-006: cloud reasoning is a constrained proposal channel
+
+NVIDIA NIM runs only after explicit case-level consent. The adapter sends bounded
+structured metadata and hashed observables rather than APK bytes, notes, code, strings,
+or raw indicators. Pydantic validation rejects unknown evidence IDs, non-allowlisted
+operations, malformed schemas, and experiments without analyst approval. AI proposals
+are stored separately and cannot create findings or change deterministic evidence status.
+
+## ADR-007: conversational assistance is a bounded evidence-tool layer
+
+The NEXUS assistant stores analyst threads and messages in SQLite and answers through a
+fixed registry of read-only tools. Those tools cover persisted case summaries, findings,
+blindspots, indicators, guarded paths, artifacts, jobs, reports, capsule verification,
+case comparison and live capabilities. There is no generic SQL, shell, ADB, arbitrary
+network fetch, filesystem write or APK-execution interface.
+
+Offline mode routes common forensic questions to deterministic tools and describes the
+returned records without pretending to use a model. Optional NVIDIA mode uses bounded
+function calling; the server overrides case-scoped arguments, limits tool rounds, hashes
+IoC values, removes artifact payloads and never forwards prior local answers. Tool runs
+and citations are persisted with the response so analysts can inspect the basis of an
+answer. Assistant output never promotes evidence status or creates a finding.

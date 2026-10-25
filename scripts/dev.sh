@@ -9,6 +9,16 @@ if [[ ! -f .env ]]; then
   echo "Created .env from .env.example"
 fi
 
+if grep -q '^SHADOWPATH_ENABLE_NVIDIA=true$' .env && [[ -z "${NVIDIA_API_KEY:-}" ]]; then
+  read -r -s -p "NVIDIA API key (input hidden; retained only for this run): " NVIDIA_API_KEY
+  echo
+  export NVIDIA_API_KEY
+  if [[ -z "$NVIDIA_API_KEY" ]]; then
+    echo "NVIDIA was enabled but no API key was entered." >&2
+    exit 1
+  fi
+fi
+
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 "$PYTHON_BIN" -m pip install -r backend/requirements.txt
 "$PYTHON_BIN" -c 'from backend.database import initialise_database; initialise_database(); print("Database initialised.")'

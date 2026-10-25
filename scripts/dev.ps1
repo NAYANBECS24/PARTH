@@ -3,6 +3,7 @@ param(
   [string]$Python = "C:\Users\nayan\AppData\Local\Programs\Python\Python312\python.exe",
   [ValidateRange(1024, 65535)][int]$ApiPort = 8000,
   [ValidateRange(1024, 65535)][int]$WebPort = 5173,
+  [switch]$EnableNvidia,
   [switch]$SkipDependencyInstall
 )
 
@@ -56,6 +57,20 @@ if (-not (Test-Path ".env")) {
 }
 if (-not (Test-Path $Python)) {
   throw "Python 3.12 was not found at '$Python'. Pass -Python <path-to-python.exe>."
+}
+
+$nvidiaEnabledInFile = Select-String -Path ".env" -Pattern '^SHADOWPATH_ENABLE_NVIDIA=true$' -Quiet
+if ($EnableNvidia) { $env:SHADOWPATH_ENABLE_NVIDIA = "true" }
+if (($EnableNvidia -or $nvidiaEnabledInFile) -and [string]::IsNullOrWhiteSpace($env:NVIDIA_API_KEY)) {
+  $secureKey = Read-Host "NVIDIA API key (input hidden; retained only for this run)" -AsSecureString
+  $keyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
+  try {
+    $env:NVIDIA_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPointer)
+  }
+  finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyPointer)
+  }
+  if ([string]::IsNullOrWhiteSpace($env:NVIDIA_API_KEY)) { throw "NVIDIA was enabled but no API key was entered." }
 }
 
 if (-not $SkipDependencyInstall) {

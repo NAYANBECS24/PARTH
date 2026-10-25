@@ -1,0 +1,12 @@
+{
+  "fixture": "device_guarded_sink",
+  "synthetic": true,
+  "expected": {
+    "guard_class": "device_state_comparison",
+    "solver_status": "sat",
+    "sensitive_operation": "android.permission.READ_CONTACTS",
+    "evidence_status": "conditionally_reachable"
+  },
+  "notes": "Controlled fixture with device-state guard resolved via Z3.",
+  "apk_sha256": "713c3601ea7c64f4660b09fc242fb54e667111badd954d9b196663ce4809b6f0"
+}

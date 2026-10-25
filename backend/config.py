@@ -27,8 +27,18 @@ class Settings:
     analysis_poll_seconds: float
     auth_disabled: bool
     enable_nvidia: bool
+    nvidia_api_key: str | None
+    nvidia_base_url: str
+    nvidia_model: str
+    nvidia_max_tokens: int
+    nvidia_timeout_seconds: float
+    nvidia_daily_call_budget: int
     allow_fixtures: bool
     cors_origins: tuple[str, ...]
+
+    @property
+    def nvidia_configured(self) -> bool:
+        return self.enable_nvidia and bool(self.nvidia_api_key) and bool(self.nvidia_model)
 
     @property
     def upload_dir(self) -> Path:
@@ -48,8 +58,30 @@ class Settings:
 
 
 def get_settings() -> Settings:
-    data_dir = _path_setting("SHADOWPATH_DATA_DIR", "data")
-    database_path = _path_setting("SHADOWPATH_DATABASE_URL", "data/shadowpath.db")
+    is_serverless = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+    if is_serverless:
+        data_dir = Path("/tmp/shadowpath_data")
+        database_path = Path("/tmp/shadowpath_data/shadowpath.db")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        seed_db = ROOT / "data" / "shadowpath.db"
+        if not database_path.exists() and seed_db.exists():
+            import shutil
+            try:
+                shutil.copy2(seed_db, database_path)
+                for sub in ("reports", "capsules", "uploads"):
+                    src_sub = ROOT / "data" / sub
+                    dest_sub = data_dir / sub
+                    if src_sub.exists() and not dest_sub.exists():
+                        shutil.copytree(src_sub, dest_sub)
+            except Exception:
+                pass
+    else:
+        data_dir = _path_setting("SHADOWPATH_DATA_DIR", "data")
+        database_path = _path_setting("SHADOWPATH_DATABASE_URL", "data/shadowpath.db")
+
+    default_auth_disabled = "true" if is_serverless else "false"
+    auth_disabled = os.getenv("SHADOWPATH_AUTH_DISABLED", default_auth_disabled).lower() == "true"
+
     settings = Settings(
         data_dir=data_dir,
         database_path=database_path,
@@ -58,8 +90,14 @@ def get_settings() -> Settings:
         max_uncompressed_bytes=int(os.getenv("SHADOWPATH_MAX_UNCOMPRESSED_BYTES", "536870912")),
         max_compression_ratio=int(os.getenv("SHADOWPATH_MAX_COMPRESSION_RATIO", "120")),
         analysis_poll_seconds=float(os.getenv("SHADOWPATH_ANALYSIS_POLL_SECONDS", "1")),
-        auth_disabled=os.getenv("SHADOWPATH_AUTH_DISABLED", "false").lower() == "true",
+        auth_disabled=auth_disabled,
         enable_nvidia=os.getenv("SHADOWPATH_ENABLE_NVIDIA", "false").lower() == "true",
+        nvidia_api_key=os.getenv("NVIDIA_API_KEY") or None,
+        nvidia_base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").rstrip("/"),
+        nvidia_model=os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
+        nvidia_max_tokens=max(256, min(int(os.getenv("NVIDIA_MAX_TOKENS", "1200")), 4096)),
+        nvidia_timeout_seconds=max(5.0, min(float(os.getenv("NVIDIA_TIMEOUT_SECONDS", "45")), 120.0)),
+        nvidia_daily_call_budget=max(1, min(int(os.getenv("NVIDIA_DAILY_CALL_BUDGET", "25")), 500)),
         allow_fixtures=os.getenv("SHADOWPATH_ALLOW_FIXTURES", "false").lower() == "true",
         cors_origins=tuple(
             origin.strip()

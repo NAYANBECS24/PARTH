@@ -1,0 +1,16 @@
+{
+  "fixture": "manifest_misconfig",
+  "synthetic": true,
+  "expected": {
+    "exported_components": 1,
+    "sensitive_permissions": [
+      "android.permission.SEND_SMS"
+    ],
+    "rules": [
+      "SP-APK-001",
+      "SP-APK-002"
+    ]
+  },
+  "notes": "Deliberately exported component without protection.",
+  "apk_sha256": "49920e6b647dc1ab7d464ad135d12bf8961f4dad75de979eef6d7164649c59cb"
+}

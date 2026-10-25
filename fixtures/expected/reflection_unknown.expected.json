@@ -1,0 +1,12 @@
+{
+  "fixture": "reflection_unknown",
+  "synthetic": true,
+  "expected": {
+    "blindspots": [
+      "DYNAMIC_CODE_LOADING_UNRESOLVED",
+      "REFLECTION_TARGET_UNRESOLVED"
+    ]
+  },
+  "notes": "Reflection-related strings producing explicit blindspot ledger entries.",
+  "apk_sha256": "ac277e0578e98ea4984f2c3f48e58e5cd510d3c506c9f15bd5c8cc61cfeeddb7"
+}

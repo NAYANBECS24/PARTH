@@ -18,6 +18,7 @@ STAGES = (
     "blindspot_ledger",
     "guarded_path_evaluation",
     "findings",
+    "ai_review",
     "capsule_report",
 )
 
@@ -227,3 +228,67 @@ def create_report(case_id: str, job_id: str, report_json_path: str, report_pdf_p
             (report_id, case_id, job_id, report_json_path, report_pdf_path, capsule_path, capsule_sha256, utcnow()),
         )
     return report_id
+
+
+def create_ai_proposal(
+    case_id: str,
+    job_id: str,
+    provider: str,
+    model: str,
+    status: str,
+    proposal: dict[str, Any] | None,
+    validation_errors: list[str],
+    evidence_ids: list[str],
+) -> str:
+    proposal_id = identifier("ai")
+    with transaction() as connection:
+        connection.execute(
+            """INSERT INTO ai_proposals
+               (id, case_id, job_id, provider, model, status, proposal_json, validation_errors_json, evidence_ids_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                proposal_id,
+                case_id,
+                job_id,
+                provider,
+                model,
+                status,
+                _json(proposal or {}),
+                _json(validation_errors),
+                _json(evidence_ids),
+                utcnow(),
+            ),
+        )
+    return proposal_id
+
+
+def add_guard_path(
+    case_id: str,
+    job_id: str,
+    target_method_id: str,
+    guard_ast: dict[str, Any],
+    solver_status: str,
+    supported_subset: bool,
+    witness: dict[str, Any] | None = None,
+    limitations: list[str] | None = None,
+) -> str:
+    path_id = identifier("gpath")
+    with transaction() as connection:
+        connection.execute(
+            """INSERT INTO guard_paths
+               (id, case_id, job_id, target_method_id, guard_ast_json, solver_status, supported_subset, witness_json, limitations_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                path_id,
+                case_id,
+                job_id,
+                target_method_id,
+                _json(guard_ast),
+                solver_status,
+                int(supported_subset),
+                _json(witness or {}),
+                _json(limitations or []),
+                utcnow(),
+            ),
+        )
+    return path_id
