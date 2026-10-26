@@ -224,6 +224,50 @@ export interface CaseReputation {
   observations: ThreatIntelObservation[];
   boundary: string;
 }
+export interface IntelligenceCaseReference {
+  id: string;
+  title: string;
+}
+export interface GlobalThreatIntelObservation extends ThreatIntelObservation {
+  case_id: string;
+  case_title: string;
+}
+export interface IntelligenceReputation {
+  provider: {
+    name: string;
+    status: string;
+    details: string;
+    remediation?: string | null;
+  };
+  observations: GlobalThreatIntelObservation[];
+  boundary: string;
+}
+export interface MitreTechniqueCoverage {
+  framework: string;
+  id: string;
+  name: string;
+  finding_count: number;
+  case_count: number;
+  severity_counts: Record<string, number>;
+  cases: IntelligenceCaseReference[];
+}
+export interface MitreCoverage {
+  items: MitreTechniqueCoverage[];
+  limitation: string;
+}
+export interface DetectionCoverageItem {
+  rule_id: string;
+  title: string;
+  category: string;
+  severity: string;
+  finding_count: number;
+  case_count: number;
+  cases: IntelligenceCaseReference[];
+}
+export interface DetectionCoverage {
+  items: DetectionCoverageItem[];
+  limitation: string;
+}
 export interface AuditEvent {
   id: number;
   username: string | null;
@@ -305,6 +349,11 @@ export const api = {
     ),
   correlations: () =>
     request<IntelligenceCorrelations>("/api/intelligence/correlations"),
+  intelligenceReputation: () =>
+    request<IntelligenceReputation>("/api/intelligence/reputation"),
+  mitreCoverage: () => request<MitreCoverage>("/api/intelligence/mitre"),
+  detectionCoverage: () =>
+    request<DetectionCoverage>("/api/intelligence/detections"),
   reputation: (caseId: string) =>
     request<CaseReputation>(`/api/cases/${caseId}/intelligence/reputation`),
   refreshReputation: (caseId: string) =>

@@ -126,9 +126,9 @@ from backend.config import settings
 from backend.database import initialise_database
 from backend.intake import StoredUpload
 from backend.repository import add_artifact, add_finding, add_indicator, create_case_and_job
-from backend.api import intelligence_correlations
+from backend.api import intelligence_correlations, intelligence_detection_coverage, intelligence_mitre_coverage
 from backend.source_workspace import JadxSourceWorkspace, SourceWorkspaceError
-from backend.threat_intel import ThreatIntelError, VirusTotalClient
+from backend.threat_intel import ThreatIntelError, VirusTotalClient, all_observations, record_observation
 
 initialise_database()
 def case(name):
@@ -146,7 +146,7 @@ right_case, right_job = right
 for case_id, job_id in ((left_case, left_job), (right_case, right_job)):
     artifact = add_artifact(case_id, job_id, 'indicator_observation', 'shared.example.test', 'dex-string:classes.dex', {'indicator_type': 'domain'})
     add_indicator(case_id, job_id, 'domain', 'shared.example.test', artifact)
-    add_finding(case_id, job_id, 'SP-APK-101', 'Dynamic code-loading API referenced', 'dynamic_code_loading', 'medium', 'fixture', [artifact])
+    add_finding(case_id, job_id, 'SP-APK-101', 'Dynamic code-loading API referenced', 'dynamic_code_loading', 'medium', 'fixture', [artifact], location={'technique': {'framework': 'MITRE ATT&CK Mobile', 'id': 'T1407', 'name': 'Download New Code at Runtime'}})
 
 root = settings.source_workspace_dir / left_sha / 'sources' / 'fixture'
 root.mkdir(parents=True, exist_ok=True)
@@ -163,7 +163,11 @@ try:
     VirusTotalClient().lookup_file(left_sha)
 except ThreatIntelError:
     vt_blocked = True
+record_observation(left_case, 'fixture-provider', 'sha256', left_sha, 'not_found', {'fixture': True})
+observations = all_observations()
 relationships = intelligence_correlations(limit=60)
+mitre = intelligence_mitre_coverage()
+detections = intelligence_detection_coverage()
 print(json.dumps({
     'generated': status['generated'],
     'file_count': len(status['files']),
@@ -171,6 +175,10 @@ print(json.dumps({
     'traversal_blocked': blocked,
     'vt_blocked_without_key': vt_blocked,
     'relationship_kinds': sorted({item['kind'] for item in relationships['items']}),
+    'mitre_ids': [item['id'] for item in mitre['items']],
+    'detection_rule_ids': [item['rule_id'] for item in detections['items']],
+    'mitre_case_count': mitre['items'][0]['case_count'],
+    'observation_case_title': observations[0]['case_title'],
 }))
 """,
         tmp_path,
@@ -181,6 +189,10 @@ print(json.dumps({
     assert result["traversal_blocked"] is True
     assert result["vt_blocked_without_key"] is True
     assert result["relationship_kinds"] == ["indicator", "rule"]
+    assert result["mitre_ids"] == ["T1407"]
+    assert result["detection_rule_ids"] == ["SP-APK-101"]
+    assert result["mitre_case_count"] == 2
+    assert result["observation_case_title"] == "left"
 
 
 def test_invalid_archive_is_rejected(tmp_path: Path) -> None:

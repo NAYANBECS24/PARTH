@@ -85,6 +85,15 @@ def record_observation(
     }
 
 
+def _hydrate_observations(rows: list[Any]) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["summary"] = json_value(item.pop("summary_json", None), {})
+        observations.append(item)
+    return observations
+
+
 def observations_for_case(case_id: str) -> list[dict[str, Any]]:
     with transaction() as connection:
         rows = connection.execute(
@@ -92,9 +101,19 @@ def observations_for_case(case_id: str) -> list[dict[str, Any]]:
                FROM threat_intel_observations WHERE case_id = ? ORDER BY observed_at DESC, id DESC LIMIT 30""",
             (case_id,),
         ).fetchall()
-    observations: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
-        item["summary"] = json_value(item.pop("summary_json", None), {})
-        observations.append(item)
-    return observations
+    return _hydrate_observations(rows)
+
+
+def all_observations(limit: int = 100) -> list[dict[str, Any]]:
+    with transaction() as connection:
+        rows = connection.execute(
+            """SELECT threat_intel_observations.id, threat_intel_observations.case_id,
+                      cases.title AS case_title, threat_intel_observations.provider,
+                      threat_intel_observations.subject_type, threat_intel_observations.subject_value,
+                      threat_intel_observations.status, threat_intel_observations.summary_json,
+                      threat_intel_observations.observed_at
+               FROM threat_intel_observations JOIN cases ON cases.id = threat_intel_observations.case_id
+               ORDER BY threat_intel_observations.observed_at DESC, threat_intel_observations.id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return _hydrate_observations(rows)

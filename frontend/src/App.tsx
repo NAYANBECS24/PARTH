@@ -55,10 +55,13 @@ import {
   type CaseDetail,
   type CaseReputation,
   type Comparison,
+  type DetectionCoverage,
   type Health,
   type IntelligenceCorrelations,
+  type IntelligenceReputation,
   type JobDetail,
   type LibraryIndicator,
+  type MitreCoverage,
   type Overview,
   type SampleRecord,
   type SourceFileContent,
@@ -95,6 +98,7 @@ const primaryNav = [
   { path: "/app/scans/new", label: "New investigation", icon: Plus },
   { path: "/app/cases", label: "Investigations", icon: FolderSearch },
   { path: "/app/samples", label: "APK library", icon: Archive },
+  { path: "/app/source", label: "Source workspace", icon: BookOpen },
   { path: "/app/findings", label: "Findings", icon: ShieldAlert },
 ];
 
@@ -102,6 +106,9 @@ const intelligenceNav = [
   { path: "/app/graph", label: "Evidence graph", icon: GitBranch },
   { path: "/app/indicators", label: "Indicators / IoCs", icon: Network },
   { path: "/app/compare", label: "Comparisons", icon: ArrowLeftRight },
+  { path: "/app/threat-intel", label: "Threat intelligence", icon: ShieldCheck },
+  { path: "/app/mitre", label: "MITRE coverage", icon: Boxes },
+  { path: "/app/detections", label: "Detection coverage", icon: ClipboardCheck },
   { path: "/app/reports", label: "Reports & capsules", icon: FileDown },
 ];
 
@@ -478,10 +485,14 @@ function CommandPalette({
       { path: "/app/scans/new", label: "New Investigation (Upload APK)", group: "Actions", icon: Plus },
       { path: "/app/cases", label: "Investigations Library", group: "Navigation", icon: FolderSearch },
       { path: "/app/samples", label: "APK Sample Library", group: "Navigation", icon: Archive },
+      { path: "/app/source", label: "Source Workspace", group: "Workspace", icon: BookOpen },
       { path: "/app/findings", label: "Findings & Triage", group: "Intelligence", icon: ShieldAlert },
       { path: "/app/graph", label: "Evidence Graph Explorer", group: "Intelligence", icon: GitBranch },
       { path: "/app/indicators", label: "Indicators & IoCs", group: "Intelligence", icon: Network },
       { path: "/app/compare", label: "Case Comparison", group: "Intelligence", icon: ArrowLeftRight },
+      { path: "/app/threat-intel", label: "Threat Intelligence", group: "Intelligence", icon: ShieldCheck },
+      { path: "/app/mitre", label: "MITRE Coverage", group: "Intelligence", icon: Boxes },
+      { path: "/app/detections", label: "Detection Coverage", group: "Intelligence", icon: ClipboardCheck },
       { path: "/app/reports", label: "Reports & Forensic Capsules", group: "Intelligence", icon: FileDown },
       { path: "/app/health", label: "System Health & RE Toolchain", group: "System", icon: HeartPulse },
       { path: "/app/settings", label: "Settings & Boundaries", group: "System", icon: Settings },
@@ -1853,6 +1864,62 @@ function SourceWorkspaceTab({ caseId }: { caseId: string }) {
   );
 }
 
+function SourceWorkspacePage() {
+  const [cases, setCases] = useState<CaseRecord[] | null>(null);
+  const [selected, setSelected] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api
+      .cases()
+      .then((result) => {
+        setCases(result.items);
+        setSelected((current) => current || result.items[0]?.id || "");
+      })
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : "Unable to load investigations"),
+      );
+  }, []);
+  return (
+    <>
+      <PageHeading
+        eyebrow="WORKSPACE TOOL"
+        title="Source workspace"
+        description="Recover and review decompiled source for one investigation. Generation is on-demand and does not run the APK."
+      />
+      {error ? (
+        <ErrorPanel error={error} />
+      ) : !cases ? (
+        <Loading />
+      ) : !cases.length ? (
+        <EmptyState
+          icon={BookOpen}
+          title="No investigations available"
+          message="Create and process an investigation before recovering source."
+        />
+      ) : (
+        <>
+          <section className="panel selector-panel">
+            <label>
+              Investigation
+              <select
+                value={selected}
+                onChange={(event) => setSelected(event.target.value)}
+              >
+                {cases.map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.title} · {shortHash(item.sample_sha256)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </section>
+          {selected ? <SourceWorkspaceTab caseId={selected} /> : null}
+        </>
+      )}
+    </>
+  );
+}
+
 function BehaviourTab({ detail }: { detail: CaseDetail }) {
   const paths = detail.guard_paths ?? [];
   if (!paths.length) {
@@ -2954,6 +3021,214 @@ function CorrelationPanel({ navigate }: { navigate: Navigate }) {
   );
 }
 
+function ThreatIntelligencePage({ navigate }: { navigate: Navigate }) {
+  const [data, setData] = useState<IntelligenceReputation | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api
+      .intelligenceReputation()
+      .then((result) => setData(result))
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Unable to load threat-intelligence observations",
+        ),
+      );
+  }, []);
+  if (error) return <ErrorPanel error={error} />;
+  if (!data) return <Loading />;
+  return (
+    <>
+      <PageHeading
+        eyebrow="INTELLIGENCE TOOL"
+        title="Threat intelligence"
+        description="Review the audit-visible history of analyst-requested external hash checks. This view never performs a lookup by itself."
+      />
+      <section className="panel intelligence-provider-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">OPTIONAL PROVIDER</p>
+            <h2>{data.provider.name}</h2>
+          </div>
+          <StatusPill value={data.provider.status} />
+        </div>
+        <p className="page-description">{data.provider.details}</p>
+        {data.provider.remediation ? (
+          <p className="factual-note">{data.provider.remediation}</p>
+        ) : null}
+        <div className="privacy-note">
+          <LockKeyhole size={17} />
+          <p>{data.boundary}</p>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">RECORDED OBSERVATIONS</p>
+            <h2>Hash lookup history</h2>
+          </div>
+          <span className="factual-note">{data.observations.length} retained</span>
+        </div>
+        {!data.observations.length ? (
+          <EmptyState
+            icon={ShieldCheck}
+            title="No external hash lookups recorded"
+            message="Open an investigation's Network / IoCs tab to deliberately request a configured hash-only lookup."
+          />
+        ) : (
+          <div className="intelligence-list">
+            {data.observations.map((item) => (
+              <article key={item.id}>
+                <div className="intelligence-list-main">
+                  <div className="intelligence-list-title">
+                    <StatusPill value={item.status} />
+                    <strong>{item.provider} · {item.subject_type}</strong>
+                  </div>
+                  <code>{item.subject_value}</code>
+                  <small>{dateTime(item.observed_at)}</small>
+                  <code className="intelligence-summary">{JSON.stringify(item.summary)}</code>
+                </div>
+                <button
+                  className="intelligence-case-link"
+                  onClick={() => navigate(`/app/cases/${item.case_id}`)}
+                >
+                  {item.case_title}
+                  <ChevronRight size={14} />
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </>
+  );
+}
+
+function MitreCoveragePage({ navigate }: { navigate: Navigate }) {
+  const [data, setData] = useState<MitreCoverage | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api
+      .mitreCoverage()
+      .then((result) => setData(result))
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : "Unable to load MITRE coverage"),
+      );
+  }, []);
+  if (error) return <ErrorPanel error={error} />;
+  if (!data) return <Loading />;
+  return (
+    <>
+      <PageHeading
+        eyebrow="INTELLIGENCE TOOL"
+        title="MITRE coverage"
+        description="Review the ATT&CK Mobile techniques explicitly mapped by evidence-backed static detections."
+      />
+      <div className="privacy-note">
+        <CircleHelp size={17} />
+        <p>{data.limitation}</p>
+      </div>
+      {!data.items.length ? (
+        <EmptyState
+          icon={Boxes}
+          title="No technique mappings recorded"
+          message="Technique mappings appear after a completed analysis emits a mapped static-behavior finding."
+        />
+      ) : (
+        <section className="intelligence-list">
+          {data.items.map((item) => (
+            <article key={`${item.framework}:${item.id}`}>
+              <div className="intelligence-list-main">
+                <p className="eyebrow">{item.framework}</p>
+                <h2><code>{item.id}</code> {item.name}</h2>
+                <div className="intelligence-metadata">
+                  <span>{item.finding_count} findings</span>
+                  <span>{item.case_count} cases</span>
+                  {Object.entries(item.severity_counts).map(([severity, count]) => (
+                    <StatusPill key={severity} value={`${severity} · ${count}`} />
+                  ))}
+                </div>
+              </div>
+              <div className="intelligence-case-links">
+                {item.cases.map((caseItem) => (
+                  <button
+                    key={caseItem.id}
+                    onClick={() => navigate(`/app/cases/${caseItem.id}`)}
+                  >
+                    {caseItem.title}
+                  </button>
+                ))}
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+    </>
+  );
+}
+
+function DetectionCoveragePage({ navigate }: { navigate: Navigate }) {
+  const [data, setData] = useState<DetectionCoverage | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api
+      .detectionCoverage()
+      .then((result) => setData(result))
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : "Unable to load detection coverage"),
+      );
+  }, []);
+  if (error) return <ErrorPanel error={error} />;
+  if (!data) return <Loading />;
+  return (
+    <>
+      <PageHeading
+        eyebrow="INTELLIGENCE TOOL"
+        title="Detection coverage"
+        description="See which static rules have produced persisted, reviewable evidence across completed investigations."
+      />
+      <div className="privacy-note">
+        <CircleHelp size={17} />
+        <p>{data.limitation}</p>
+      </div>
+      {!data.items.length ? (
+        <EmptyState
+          icon={ClipboardCheck}
+          title="No persisted detections"
+          message="Detection evidence appears after an investigation completes with reviewable findings."
+        />
+      ) : (
+        <section className="intelligence-list">
+          {data.items.map((item) => (
+            <article key={`${item.rule_id}:${item.category}:${item.severity}`}>
+              <div className="intelligence-list-main">
+                <p className="eyebrow"><code>{item.rule_id}</code> · {item.category}</p>
+                <h2>{item.title}</h2>
+                <div className="intelligence-metadata">
+                  <StatusPill value={item.severity} />
+                  <span>{item.finding_count} findings</span>
+                  <span>{item.case_count} cases</span>
+                </div>
+              </div>
+              <div className="intelligence-case-links">
+                {item.cases.map((caseItem) => (
+                  <button
+                    key={caseItem.id}
+                    onClick={() => navigate(`/app/cases/${caseItem.id}`)}
+                  >
+                    {caseItem.title}
+                  </button>
+                ))}
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+    </>
+  );
+}
+
 function ComparePage({ navigate }: { navigate: Navigate }) {
   const [cases, setCases] = useState<CaseRecord[] | null>(null);
   const [left, setLeft] = useState("");
@@ -3712,9 +3987,13 @@ function Route({ path, navigate }: { path: string; navigate: Navigate }) {
     return <JobPage id={path.split("/").pop()!} navigate={navigate} />;
   if (path === "/app/findings") return <FindingsPage />;
   if (path === "/app/samples") return <SamplesPage navigate={navigate} />;
+  if (path === "/app/source") return <SourceWorkspacePage />;
   if (path === "/app/graph") return <GlobalGraphPage />;
   if (path === "/app/indicators") return <IndicatorsPage navigate={navigate} />;
   if (path === "/app/compare") return <ComparePage navigate={navigate} />;
+  if (path === "/app/threat-intel") return <ThreatIntelligencePage navigate={navigate} />;
+  if (path === "/app/mitre") return <MitreCoveragePage navigate={navigate} />;
+  if (path === "/app/detections") return <DetectionCoveragePage navigate={navigate} />;
   if (path === "/app/reports") return <ReportsPage />;
   if (path === "/app/health") return <HealthPage />;
   if (path === "/app/settings") return <SettingsPage />;

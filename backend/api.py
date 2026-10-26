@@ -27,7 +27,13 @@ from backend.intake import store_upload
 from backend.reports import verify_capsule
 from backend.repository import create_case_and_job, create_retry_job, identifier, json_value, request_cancel
 from backend.source_workspace import JadxSourceWorkspace, SourceWorkspaceError
-from backend.threat_intel import ThreatIntelError, VirusTotalClient, observations_for_case, record_observation
+from backend.threat_intel import (
+    ThreatIntelError,
+    VirusTotalClient,
+    all_observations,
+    observations_for_case,
+    record_observation,
+)
 
 
 def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -789,6 +795,109 @@ def intelligence_correlations(limit: int = Query(default=60, ge=1, le=200)) -> d
     return {
         "items": relationships[:limit],
         "limitation": "A shared static indicator, certificate blob, or rule is a review lead only. It does not establish a malware family, common author, campaign, or actor attribution.",
+    }
+
+
+@app.get("/api/intelligence/reputation")
+def intelligence_reputation() -> dict[str, Any]:
+    """List recorded external hash observations without making an external call."""
+    tool = ReverseEngineeringToolchain.detect_virustotal()
+    return {
+        "provider": {"name": tool.name, "status": tool.status, "details": tool.details, "remediation": tool.remediation},
+        "observations": all_observations(),
+        "boundary": "Only analyst-initiated SHA-256 lookups appear here. This workspace never uploads APK bytes or bulk-submits extracted indicators.",
+    }
+
+
+@app.get("/api/intelligence/mitre")
+def intelligence_mitre_coverage() -> dict[str, Any]:
+    """Aggregate only persisted technique mappings produced by static rules."""
+    with transaction() as connection:
+        rows = connection.execute(
+            """SELECT findings.case_id, findings.severity, findings.location_json, cases.title AS case_title
+               FROM findings JOIN cases ON cases.id = findings.case_id
+               ORDER BY findings.created_at DESC"""
+        ).fetchall()
+
+    techniques: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        location = json_value(row["location_json"], {})
+        technique = location.get("technique") if isinstance(location, dict) else None
+        if not isinstance(technique, dict):
+            continue
+        technique_id = technique.get("id")
+        technique_name = technique.get("name")
+        framework = technique.get("framework", "MITRE ATT&CK Mobile")
+        if not isinstance(technique_id, str) or not technique_id or not isinstance(technique_name, str) or not technique_name:
+            continue
+        if not isinstance(framework, str) or not framework:
+            framework = "MITRE ATT&CK Mobile"
+        key = (framework, technique_id, technique_name)
+        item = techniques.setdefault(
+            key,
+            {
+                "framework": framework,
+                "id": technique_id,
+                "name": technique_name,
+                "finding_count": 0,
+                "severity_counts": {},
+                "cases": {},
+            },
+        )
+        item["finding_count"] += 1
+        severity = row["severity"] if isinstance(row["severity"], str) else "unknown"
+        item["severity_counts"][severity] = item["severity_counts"].get(severity, 0) + 1
+        item["cases"][row["case_id"]] = {"id": row["case_id"], "title": row["case_title"]}
+
+    items = []
+    for item in techniques.values():
+        item["cases"] = sorted(item["cases"].values(), key=lambda case: case["title"].lower())
+        item["case_count"] = len(item["cases"])
+        items.append(item)
+    items.sort(key=lambda item: (-item["finding_count"], -item["case_count"], item["id"]))
+    return {
+        "items": items,
+        "limitation": "Coverage reflects only persisted static-rule mappings. It is not proof that an APK executed a technique and does not measure complete ATT&CK coverage.",
+    }
+
+
+@app.get("/api/intelligence/detections")
+def intelligence_detection_coverage() -> dict[str, Any]:
+    """Show rules that have actually produced reviewable findings."""
+    with transaction() as connection:
+        rows = connection.execute(
+            """SELECT findings.rule_id, findings.title, findings.category, findings.severity,
+                      findings.case_id, cases.title AS case_title
+               FROM findings JOIN cases ON cases.id = findings.case_id
+               ORDER BY findings.created_at DESC"""
+        ).fetchall()
+
+    detections: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (row["rule_id"], row["title"], row["category"], row["severity"])
+        item = detections.setdefault(
+            key,
+            {
+                "rule_id": row["rule_id"],
+                "title": row["title"],
+                "category": row["category"],
+                "severity": row["severity"],
+                "finding_count": 0,
+                "cases": {},
+            },
+        )
+        item["finding_count"] += 1
+        item["cases"][row["case_id"]] = {"id": row["case_id"], "title": row["case_title"]}
+
+    items = []
+    for item in detections.values():
+        item["cases"] = sorted(item["cases"].values(), key=lambda case: case["title"].lower())
+        item["case_count"] = len(item["cases"])
+        items.append(item)
+    items.sort(key=lambda item: (-item["finding_count"], -item["case_count"], item["rule_id"]))
+    return {
+        "items": items,
+        "limitation": "This is evidence of detections emitted by completed analyses, not a claim that every available rule has been exercised or that all malicious behavior was detected.",
     }
 
 

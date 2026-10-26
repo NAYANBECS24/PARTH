@@ -817,3 +817,25 @@ h3 { font-weight: 650; }
 .reputation-observations strong { display: block; font-size: 11px; margin-bottom: 5px; }
 .reputation-observations code { color: var(--text-muted); display: block; font-size: 10px; overflow-wrap: anywhere; white-space: normal; }
 .empty-inline { color: var(--text-muted); font-size: 12px; margin: 15px 0 0; }
+
+.intelligence-provider-panel { margin-bottom: 14px; }
+.intelligence-provider-panel .privacy-note { margin: 14px 0 0; }
+.intelligence-list { display: grid; gap: 10px; }
+.intelligence-list > article { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid var(--border); background: var(--surface); }
+.intelligence-list-main { min-width: 0; display: grid; gap: 7px; }
+.intelligence-list-main h2 { margin: 0; font-size: 15px; }
+.intelligence-list-main > code { color: var(--text-muted); overflow-wrap: anywhere; white-space: normal; font-size: 10px; }
+.intelligence-list-main > small { color: var(--text-muted); font-size: 10px; }
+.intelligence-list-title { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.intelligence-list-title strong { font-size: 11px; }
+.intelligence-summary { max-width: 760px; padding: 7px; border-left: 2px solid var(--border-strong); background: var(--surface-soft); }
+.intelligence-metadata { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--text-muted); font-size: 10px; }
+.intelligence-metadata > span:not(.status-pill) { padding: 3px 6px; border: 1px solid var(--border); background: var(--surface-soft); }
+.intelligence-case-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; max-width: 390px; }
+.intelligence-case-links button, .intelligence-case-link { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); background: var(--surface-raised); color: var(--accent); padding: 5px 7px; border-radius: 4px; font-size: 10px; }
+.intelligence-case-links button:hover, .intelligence-case-link:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+@media (max-width: 700px) {
+  .intelligence-list > article { flex-direction: column; }
+  .intelligence-case-links { justify-content: flex-start; max-width: none; }
+}
