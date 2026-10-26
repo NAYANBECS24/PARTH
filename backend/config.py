@@ -11,6 +11,17 @@ ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
 
 
+def _is_serverless_environment() -> bool:
+    """Detect serverless runtimes even when optional Vercel variables are hidden."""
+    return bool(
+        os.getenv("VERCEL")
+        or os.getenv("VERCEL_ENV")
+        or os.getenv("VERCEL_REGION")
+        or os.getenv("AWS_LAMBDA_FUNCTION_NAME")
+        or Path("/var/task").is_dir()
+    )
+
+
 def _path_setting(name: str, default: str) -> Path:
     value = Path(os.getenv(name, default))
     return value if value.is_absolute() else (ROOT / value).resolve()
@@ -58,7 +69,7 @@ class Settings:
 
 
 def get_settings() -> Settings:
-    is_serverless = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+    is_serverless = _is_serverless_environment()
     if is_serverless:
         data_dir = Path("/tmp/shadowpath_data")
         database_path = Path("/tmp/shadowpath_data/shadowpath.db")

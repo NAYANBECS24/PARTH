@@ -103,6 +103,36 @@ print(json.dumps({'title': app.title, 'bootstrap_required': bootstrap_required()
     assert result == {"title": "SHADOWPATH Ω — NEXUS API", "bootstrap_required": True}
 
 
+def test_vercel_entrypoint_uses_serverless_storage(tmp_path: Path) -> None:
+    result = run_isolated(
+        """
+import json
+import os
+
+os.environ['VERCEL'] = '1'
+os.environ['SHADOWPATH_AUTH_DISABLED'] = 'true'
+from api.index import app
+from backend.config import settings
+from backend.database import transaction
+
+with transaction() as connection:
+    users_table = connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone() is not None
+
+print(json.dumps({
+    'title': app.title,
+    'serverless_data_dir': settings.data_dir.name == 'shadowpath_data' and settings.database_path.parent == settings.data_dir,
+    'users_table': users_table,
+}))
+""",
+        tmp_path,
+    )
+    assert result == {
+        "title": "SHADOWPATH Ω — NEXUS API",
+        "serverless_data_dir": True,
+        "users_table": True,
+    }
+
+
 def test_capsule_verifier_rejects_tampered_content(tmp_path: Path) -> None:
     result = run_isolated(
         """
