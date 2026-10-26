@@ -199,6 +199,9 @@ function StatusPill({ value }: { value: string }) {
         : value.includes("running") || value.includes("queued")
           ? "info"
           : value.includes("completed") ||
+              value.includes("available") ||
+              value.includes("configured") ||
+              value.includes("ready") ||
               value.includes("clear") ||
               value.includes("verified") ||
               value.includes("observed")

@@ -31,6 +31,7 @@ def _path_setting(name: str, default: str) -> Path:
 class Settings:
     data_dir: Path
     database_path: Path
+    toolchain_dir: Path
     max_upload_bytes: int
     max_archive_entries: int
     max_uncompressed_bytes: int
@@ -96,6 +97,7 @@ def get_settings() -> Settings:
     settings = Settings(
         data_dir=data_dir,
         database_path=database_path,
+        toolchain_dir=_path_setting("SHADOWPATH_TOOLCHAIN_DIR", ".toolcache"),
         max_upload_bytes=int(os.getenv("SHADOWPATH_MAX_UPLOAD_BYTES", "104857600")),
         max_archive_entries=int(os.getenv("SHADOWPATH_MAX_ARCHIVE_ENTRIES", "12000")),
         max_uncompressed_bytes=int(os.getenv("SHADOWPATH_MAX_UNCOMPRESSED_BYTES", "536870912")),

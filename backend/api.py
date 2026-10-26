@@ -185,6 +185,8 @@ def health() -> dict[str, Any]:
         androguard_status = {"status": "available", "version": getattr(androguard, "__version__", "installed")}
     except ImportError:
         androguard_status = {"status": "unavailable", "reason": "Python dependency not installed"}
+    toolchain = ReverseEngineeringToolchain.capabilities_map()["tools"]
+    dynamic_lab = toolchain["dynamic_lab"]
     return {
         "status": "ok",
         "mode": "local_static_only",
@@ -196,7 +198,7 @@ def health() -> dict[str, Any]:
             "zip_inventory": "available",
             "androguard": androguard_status,
             "nvidia": "configured" if settings.nvidia_configured else "missing_key" if settings.enable_nvidia else "not_configured",
-            "dynamic_lab": "not_configured",
+            "dynamic_lab": "isolated_ready" if dynamic_lab.get("path") else "not_configured",
         },
     }
 

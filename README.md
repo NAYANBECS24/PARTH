@@ -133,6 +133,37 @@ Double-click `start.bat` in the project root, or execute via PowerShell:
 ```
 The script auto-detects dependencies, boots the FastAPI API on `http://127.0.0.1:8000`, starts the analysis pipeline, and serves the analyst UI at `http://127.0.0.1:5173`.
 
+#### Full local static-toolchain setup (recommended)
+
+Run this once in PowerShell. It downloads pinned copies of JADX (with its own JRE),
+Android Build-Tools (`aapt2`, `apksigner`) and Platform-Tools (`adb`) into the
+repository's ignored `.toolcache/` folder. It does not alter the system PATH.
+
+```powershell
+.\scripts\install-local-toolchain.ps1
+.\scripts\dev.ps1
+```
+
+After restarting the API, the System Health page will report JADX, AAPT2, ApkSigner,
+and the isolated-lab ADB client as ready. An attached emulator is intentionally not
+treated as a safe dynamic-analysis environment until it is isolated from the host and
+network.
+
+### Option C: Full toolchain container deployment (recommended for a real server)
+
+The Vercel deployment is a serverless static-analysis demo. For persistent uploads,
+the worker process, JADX and Android SDK tools, use the included container stack:
+
+```bash
+docker compose up --build
+```
+
+Open `http://localhost:8080`. The frontend proxies `/api` and `/health` to the API,
+and the worker shares the persisted `data/` volume. This is the deployment to run on
+an Ubuntu VM with an encrypted persistent disk. Keep an external MobSF instance and
+an Android emulator/Frida lab on a separately isolated network; never attach an
+untrusted APK runtime to the application server.
+
 #### 2. Manual Terminal Launch
 **Terminal 1 — Backend API & Worker:**
 ```bash

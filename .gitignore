@@ -1,5 +1,6 @@
 .env
 .venv/
+.toolcache/
 __pycache__/
 .pytest_cache/
 .mypy_cache/
@@ -7,4 +8,6 @@ node_modules/
 frontend/dist/
 *.pyc
 data/*.log
+data/*.db-shm
+data/*.db-wal
 .github/

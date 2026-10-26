@@ -153,7 +153,7 @@ export interface GuardPath {
 export interface ToolStatus {
   name: string;
   category: string;
-  status: "available" | "not_configured" | "fallback" | "isolated";
+  status: "available" | "configured" | "not_configured" | "fallback" | "isolated";
   version?: string;
   path?: string;
   details?: string;

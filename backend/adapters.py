@@ -42,30 +42,72 @@ class ReverseEngineeringToolchain:
       clean hooks for JADX, AAPT2, ApkSigner, MobSF, and Dynamic Lab.
     """
 
+    @staticmethod
+    def _tool_binary(*names: str) -> str | None:
+        """Find a system tool or one provisioned by scripts/install-local-toolchain.ps1.
+
+        The local bootstrap keeps downloaded tools inside .toolcache instead of
+        changing machine-wide PATH. The container image exposes the same tools
+        through PATH, so this lookup works in both deployment modes.
+        """
+        for name in names:
+            binary = shutil.which(name)
+            if binary:
+                return binary
+        toolchain = settings.toolchain_dir
+        for name in names:
+            direct = toolchain / "bin" / name
+            if direct.is_file():
+                return str(direct)
+        if toolchain.is_dir():
+            for name in names:
+                try:
+                    candidate = next((path for path in toolchain.rglob(name) if path.is_file()), None)
+                except OSError:
+                    candidate = None
+                if candidate:
+                    return str(candidate)
+        return None
+
+    @staticmethod
+    def _version(binary: str, *arguments: str) -> str:
+        environment = os.environ.copy()
+        bundled_java_home = settings.toolchain_dir / "jadx" / "jre"
+        if not environment.get("JAVA_HOME") and (bundled_java_home / "bin" / "java.exe").is_file():
+            environment["JAVA_HOME"] = str(bundled_java_home)
+        try:
+            proc = subprocess.run(
+                [binary, *arguments],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                env=environment,
+            )
+            output = (proc.stdout or proc.stderr).strip().splitlines()
+            # Windows vendor .bat launchers sometimes echo their own CMD
+            # statements before writing the actual tool version. Prefer the
+            # last non-shell output line in that case.
+            for line in reversed(output):
+                cleaned = line.strip()
+                lowered = cleaned.lower()
+                if cleaned and not lowered.startswith(("c:\\", "if ", "set ", "goto ", "rem ")):
+                    return cleaned[:120]
+            return output[0][:120] if output else "detected"
+        except Exception:
+            return "detected"
+
     @classmethod
     def detect_jadx(cls) -> ToolStatus:
-        binary = shutil.which("jadx") or shutil.which("jadx.bat")
+        binary = cls._tool_binary("jadx.bat", "jadx") if os.name == "nt" else cls._tool_binary("jadx", "jadx.bat")
         if binary:
-            try:
-                proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=5)
-                version = proc.stdout.strip() or "detected"
-                return ToolStatus(
-                    name="JADX Decompiler",
-                    category="decompiler",
-                    status="available",
-                    version=version,
-                    path=binary,
-                    details="JADX command-line decompiler is detected and available for Java source recovery.",
-                )
-            except Exception as exc:
-                return ToolStatus(
-                    name="JADX Decompiler",
-                    category="decompiler",
-                    status="available",
-                    version="unknown",
-                    path=binary,
-                    details=f"JADX found at {binary} but version query failed: {exc}",
-                )
+            return ToolStatus(
+                name="JADX Decompiler",
+                category="decompiler",
+                status="available",
+                version=cls._version(binary, "--version"),
+                path=binary,
+                details="JADX command-line decompiler is detected and available for Java source recovery.",
+            )
         return ToolStatus(
             name="JADX Decompiler",
             category="decompiler",
@@ -76,27 +118,16 @@ class ReverseEngineeringToolchain:
 
     @classmethod
     def detect_aapt2(cls) -> ToolStatus:
-        binary = shutil.which("aapt2") or shutil.which("aapt")
+        binary = cls._tool_binary("aapt2.exe", "aapt.exe", "aapt2", "aapt") if os.name == "nt" else cls._tool_binary("aapt2", "aapt", "aapt2.exe", "aapt.exe")
         if binary:
-            try:
-                proc = subprocess.run([binary, "version"], capture_output=True, text=True, timeout=5)
-                version = proc.stdout.strip()[:40] or "detected"
-                return ToolStatus(
-                    name="AAPT2 Android Asset Tool",
-                    category="resource_extractor",
-                    status="available",
-                    version=version,
-                    path=binary,
-                    details="AAPT2 binary is present for Android binary XML and asset compilation checks.",
-                )
-            except Exception:
-                return ToolStatus(
-                    name="AAPT2 Android Asset Tool",
-                    category="resource_extractor",
-                    status="available",
-                    path=binary,
-                    details="AAPT2 binary found in PATH.",
-                )
+            return ToolStatus(
+                name="AAPT2 Android Asset Tool",
+                category="resource_extractor",
+                status="available",
+                version=cls._version(binary, "version"),
+                path=binary,
+                details="Android Asset Packaging Tool is present for binary XML and resource checks.",
+            )
         return ToolStatus(
             name="AAPT2 Android Asset Tool",
             category="resource_extractor",
@@ -107,7 +138,7 @@ class ReverseEngineeringToolchain:
 
     @classmethod
     def detect_apksigner(cls) -> ToolStatus:
-        binary = shutil.which("apksigner") or shutil.which("apksigner.bat")
+        binary = cls._tool_binary("apksigner", "apksigner.bat")
         if binary:
             return ToolStatus(
                 name="Android ApkSigner",
@@ -127,12 +158,21 @@ class ReverseEngineeringToolchain:
     @classmethod
     def detect_mobsf(cls) -> ToolStatus:
         mobsf_url = os.environ.get("MOBSF_API_URL")
+        mobsf_key = os.environ.get("MOBSF_API_KEY")
+        if mobsf_url and mobsf_key:
+            return ToolStatus(
+                name="MobSF Security Framework",
+                category="integrated_analyzer",
+                status="configured",
+                details="MobSF REST endpoint and API credentials are configured. The external service remains isolated from this host.",
+            )
         if mobsf_url:
             return ToolStatus(
                 name="MobSF Security Framework",
                 category="integrated_analyzer",
-                status="available",
-                details=f"MobSF REST API configured at {mobsf_url}.",
+                status="not_configured",
+                details="A MobSF URL is present, but its API key is missing. No service connection is claimed.",
+                remediation="Set MOBSF_API_KEY alongside MOBSF_API_URL after deploying an isolated MobSF instance.",
             )
         return ToolStatus(
             name="MobSF Security Framework",
@@ -144,14 +184,15 @@ class ReverseEngineeringToolchain:
 
     @classmethod
     def detect_dynamic_lab(cls) -> ToolStatus:
-        adb_binary = shutil.which("adb")
+        adb_binary = cls._tool_binary("adb.exe", "adb") if os.name == "nt" else cls._tool_binary("adb", "adb.exe")
+        client_state = "ADB client is installed and ready to connect to an explicitly configured isolated emulator or dedicated device." if adb_binary else "ADB client is not installed; no isolated Android runtime can be contacted."
         return ToolStatus(
             name="Dynamic Analysis Lab (ADB / Frida)",
             category="dynamic_sandbox",
             status="isolated",
             path=adb_binary,
-            details="Host execution disabled by design (Never execute untrusted APKs on analyst host). Dynamic analysis requires an isolated external emulator or dedicated device.",
-            remediation="Configure a quarantined Android emulator or virtual device on an isolated network.",
+            details=f"{client_state} Host execution remains disabled by design; untrusted APKs are never launched on the analyst host.",
+            remediation="Connect a quarantined emulator or dedicated device on an isolated network before enabling any dynamic workflow.",
         )
 
     @classmethod
