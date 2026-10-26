@@ -677,14 +677,20 @@ def _nvidia_answer(question: str, case_id: str | None, history: list[dict[str, A
     messages.append({"role": "user", "content": question})
     client = OpenAI(base_url=settings.nvidia_base_url, api_key=settings.nvidia_api_key, timeout=settings.nvidia_timeout_seconds, max_retries=2)
     results: list[ToolResult] = []
-    for _ in range(MAX_MODEL_TOOL_ROUNDS):
+    for round_index in range(MAX_MODEL_TOOL_ROUNDS):
+        # A case-scoped cloud answer must ground itself in at least one
+        # server-side evidence tool. Requiring a first tool call avoids a
+        # plausible-sounding answer with no case evidence; later rounds may
+        # either ask for another bounded tool or return the final answer.
+        tool_choice: str = "required" if case_id and round_index == 0 else "auto"
         completion = client.chat.completions.create(
             model=settings.nvidia_model,
             messages=messages,
             tools=_model_tools(case_id),
-            tool_choice="auto",
+            tool_choice=tool_choice,
             temperature=0.1,
             max_tokens=settings.nvidia_max_tokens,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             stream=False,
         )
         if not completion.choices:

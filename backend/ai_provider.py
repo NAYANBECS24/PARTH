@@ -229,7 +229,12 @@ class NvidiaNimProvider:
                 temperature=0.2,
                 top_p=0.95,
                 max_tokens=self.settings.nvidia_max_tokens,
-                extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+                # TRI-PROOF requires a complete machine-readable proposal. On
+                # reasoning-capable NIM models, hidden reasoning spends the
+                # same output budget and can truncate that JSON. Keep this
+                # bounded proposal call direct and require JSON mode instead.
+                response_format={"type": "json_object"},
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
                 stream=False,
             )
             content = completion.choices[0].message.content if completion.choices else None
