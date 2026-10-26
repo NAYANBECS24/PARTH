@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import textwrap
 import zipfile
@@ -108,6 +109,30 @@ def build_report_payload(
 
 def _pdf_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _finding_pdf_detail(finding: dict[str, Any]) -> str:
+    """Build a safe, compact finding detail cell for the human-readable PDF."""
+    title = html.escape(str(finding.get("title", "")))
+    description = html.escape(str(finding.get("description", "")))
+    location = finding.get("location") or {}
+    technique = location.get("technique") if isinstance(location, dict) else None
+    detail: list[str] = []
+    if isinstance(technique, dict) and technique.get("id"):
+        label = " ".join(
+            value
+            for value in (str(technique.get("id", "")), str(technique.get("name", "")))
+            if value
+        )
+        detail.append(f"Technique: {html.escape(label)}")
+    confidence = location.get("confidence") if isinstance(location, dict) else None
+    if confidence:
+        detail.append(f"Static confidence: {html.escape(str(confidence))}")
+    matched_terms = location.get("matched_terms") if isinstance(location, dict) else None
+    if isinstance(matched_terms, list) and matched_terms:
+        detail.append("Signals: " + html.escape(", ".join(str(term) for term in matched_terms[:8])))
+    suffix = f"<br/><font size=\"7\">{' | '.join(detail)}</font>" if detail else ""
+    return f"<b>{title}</b><br/>{description}{suffix}"
 
 
 def _minimal_pdf(lines: list[str]) -> bytes:
@@ -239,7 +264,7 @@ def _generate_reportlab_pdf(payload: dict[str, Any]) -> bytes:
                 Paragraph(f.get("rule_id", ""), cell_style),
                 Paragraph(sev, cell_bold),
                 Paragraph(st, cell_style),
-                Paragraph(f"<b>{f.get('title', '')}</b><br/>{f.get('description', '')}", cell_style),
+                Paragraph(_finding_pdf_detail(f), cell_style),
             ])
         f_table = Table(findings_data, colWidths=[70, 60, 90, 320])
         f_table.setStyle(TableStyle([

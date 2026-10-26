@@ -50,6 +50,106 @@ SENSITIVE_PERMISSIONS = {
     "android.permission.SYSTEM_ALERT_WINDOW",
 }
 
+# These rules deliberately describe *static capability evidence*, not confirmed
+# behavior.  A printable DEX string or a declared permission can be produced by
+# a library, dead code, or an unexercised feature, so every rule below preserves
+# the exact signals and keeps a runtime limitation with the finding.
+BEHAVIOR_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "rule_id": "SP-APK-101",
+        "title": "Dynamic code-loading API referenced",
+        "category": "dynamic_code_loading",
+        "severity": "medium",
+        "terms": ("DexClassLoader", "PathClassLoader", "InMemoryDexClassLoader", "loadDex"),
+        "technique": {"framework": "MITRE ATT&CK Mobile", "id": "T1407", "name": "Download New Code at Runtime"},
+        "description": "Static DEX content references Android code-loading APIs. The reference can support loading code outside the initial APK, but no download, payload, or runtime execution was observed.",
+        "limitations": [
+            "String and API-reference analysis cannot prove that external code was fetched or executed.",
+            "The target path, provenance, and runtime-loaded payload remain unresolved.",
+        ],
+    },
+    {
+        "rule_id": "SP-APK-102",
+        "title": "Accessibility-service API referenced",
+        "category": "accessibility",
+        "severity": "medium",
+        "terms": ("AccessibilityService", "BIND_ACCESSIBILITY_SERVICE", "onAccessibilityEvent"),
+        "technique": {"framework": "MITRE ATT&CK Mobile", "id": "T1453", "name": "Abuse Accessibility Features"},
+        "description": "Static DEX content references Android accessibility-service APIs. Accessibility is used by legitimate assistive features as well as security-sensitive workflows; no service activation or event handling was observed.",
+        "limitations": [
+            "Static references do not show whether a user enabled an accessibility service.",
+            "No accessibility events, UI content, or action dispatch were observed at runtime.",
+        ],
+    },
+    {
+        "rule_id": "SP-APK-103",
+        "title": "Potential accessibility keylogging signal referenced",
+        "category": "input_capture",
+        "severity": "medium",
+        "terms": ("TYPE_VIEW_TEXT_CHANGED", "TYPE_VIEW_TEXT_SELECTION_CHANGED"),
+        "requires_any": ("AccessibilityService", "onAccessibilityEvent", "BIND_ACCESSIBILITY_SERVICE"),
+        "technique": {"framework": "MITRE ATT&CK Mobile", "id": "T1417.001", "name": "Keylogging"},
+        "description": "Static DEX content combines text-change event handling with accessibility-service signals. This can be relevant to input capture, but it is not evidence that keystrokes were collected or transmitted.",
+        "limitations": [
+            "This rule requires static signal correlation and cannot establish data collection intent.",
+            "No live accessibility event stream or network exfiltration was observed.",
+        ],
+    },
+    {
+        "rule_id": "SP-APK-104",
+        "title": "SMS-sending API referenced",
+        "category": "messaging",
+        "severity": "medium",
+        "terms": ("SmsManager", "sendTextMessage", "sendMultipartTextMessage"),
+        "permissions": ("android.permission.SEND_SMS",),
+        "technique": {"framework": "MITRE ATT&CK Mobile", "id": "T1582", "name": "SMS Control"},
+        "description": "Static DEX content references SMS-sending APIs. If the declared permission is granted and the path is reachable, the app could send SMS; no message composition or delivery was observed.",
+        "limitations": [
+            "The declared permission may be denied, unused, or used for a legitimate feature.",
+            "No SMS send operation, recipient, or message body was observed at runtime.",
+        ],
+    },
+    {
+        "rule_id": "SP-APK-105",
+        "title": "Screen-capture API referenced",
+        "category": "screen_capture",
+        "severity": "medium",
+        "terms": ("MediaProjection", "createVirtualDisplay"),
+        "technique": {"framework": "MITRE ATT&CK Mobile", "id": "T1513", "name": "Screen Capture"},
+        "description": "Static DEX content references Android screen-capture APIs. Android normally requires user-mediated projection approval; no approval flow or captured frames were observed.",
+        "limitations": [
+            "API references cannot establish whether projection approval was requested or granted.",
+            "No screen frames, media stream, or destination were observed.",
+        ],
+    },
+    {
+        "rule_id": "SP-APK-106",
+        "title": "Overlay-window capability referenced",
+        "category": "overlay",
+        "severity": "low",
+        "terms": ("TYPE_APPLICATION_OVERLAY", "TYPE_SYSTEM_ALERT"),
+        "permissions": ("android.permission.SYSTEM_ALERT_WINDOW",),
+        "technique": {"framework": "MITRE ATT&CK Mobile", "id": "T1417.002", "name": "GUI Input Capture"},
+        "description": "Static analysis found an overlay-window signal. Overlay windows have legitimate uses, and this reference alone does not establish deceptive UI, input capture, or user interaction.",
+        "limitations": [
+            "Static analysis cannot determine the content, timing, or visual behavior of an overlay.",
+            "No input events or rendered overlay were observed at runtime.",
+        ],
+    },
+    {
+        "rule_id": "SP-APK-107",
+        "title": "Instrumentation or root-detection signal referenced",
+        "category": "anti_analysis",
+        "severity": "low",
+        "terms": ("frida", "xposed", "magisk", "test-keys", "/proc/self/maps"),
+        "description": "Static DEX content contains a common instrumentation or root-detection marker. This may indicate environment-integrity checks, but static strings do not reveal whether detection logic is reachable or evasive.",
+        "limitations": [
+            "A marker can originate in a third-party library or unused code path.",
+            "No debugger, root, or instrumentation response was observed at runtime.",
+        ],
+    },
+)
+
 
 class CancellationRequested(Exception):
     pass
@@ -671,6 +771,84 @@ def _guarded_paths(state: AnalysisState) -> None:
         _finish_stage(state, "guarded_path_evaluation", partial=True, detail={"outcome": "unsupported", "solver": "z3"})
 
 
+def _behavior_matches(state: AnalysisState, terms: tuple[str, ...]) -> tuple[list[str], list[str]]:
+    """Return matched rule terms and DEX files without interpreting execution."""
+    matched_terms: list[str] = []
+    source_files: set[str] = set()
+    for term in terms:
+        # Do not treat a marker embedded in a longer identifier (for example,
+        # ``friday``) as a match for ``frida``. Android API references are
+        # normally delimited by punctuation in DEX strings.
+        word_bounded = term[0].isalnum() and term[-1].isalnum()
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])" if word_bounded else re.escape(term),
+            re.IGNORECASE,
+        )
+        term_matched = False
+        for dex_name, value in state.dex_strings:
+            if pattern.search(value):
+                source_files.add(dex_name)
+                term_matched = True
+        if term_matched:
+            matched_terms.append(term)
+    return matched_terms, sorted(source_files)
+
+
+def _behavior_findings(state: AnalysisState) -> int:
+    """Create conservative, source-linked Android capability findings.
+
+    The scanner has string/API inventory rather than a whole-program call graph.
+    As a result, it records an observed reference with a bounded confidence level
+    and never converts a rule match into a claim that the behavior executed.
+    """
+    finding_count = 0
+    declared_permissions = set(state.manifest.get("permissions", []))
+    for rule in BEHAVIOR_RULES:
+        primary_terms = tuple(rule["terms"])
+        matched_terms, source_files = _behavior_matches(state, primary_terms)
+        if not matched_terms:
+            continue
+
+        required_terms = tuple(rule.get("requires_any", ()))
+        required_matches, required_sources = _behavior_matches(state, required_terms)
+        if required_terms and not required_matches:
+            continue
+
+        matched_permissions = sorted(declared_permissions.intersection(rule.get("permissions", ())))
+        all_matched_terms = [*matched_terms, *required_matches]
+        all_sources = sorted(set(source_files).union(required_sources))
+        # A second independent static signal can raise confidence from low to
+        # medium. It remains below high because reachability is not established.
+        confidence = "medium" if len(all_matched_terms) >= 2 or matched_permissions else "low"
+        artifacts = [*state.artifact_ids.get("dex", [])]
+        if matched_permissions:
+            artifacts.extend(state.artifact_ids.get("manifest", []))
+        location: dict[str, Any] = {
+            "evidence_type": "static_api_reference",
+            "confidence": confidence,
+            "matched_terms": all_matched_terms,
+            "source_files": all_sources,
+        }
+        if matched_permissions:
+            location["matched_permissions"] = matched_permissions
+        if rule.get("technique"):
+            location["technique"] = rule["technique"]
+        add_finding(
+            state.case_id,
+            state.job_id,
+            rule["rule_id"],
+            rule["title"],
+            rule["category"],
+            rule["severity"],
+            rule["description"],
+            list(dict.fromkeys(artifacts)),
+            list(rule["limitations"]),
+            location=location,
+        )
+        finding_count += 1
+    return finding_count
+
+
 def _findings(state: AnalysisState) -> tuple[int, str]:
     _stage(state, "findings")
     finding_count = 0
@@ -686,6 +864,12 @@ def _findings(state: AnalysisState) -> tuple[int, str]:
                 f"The manifest declares {permission}. This is an observed declaration, not evidence of malicious use.",
                 state.artifact_ids.get("manifest", []),
                 ["Static manifest analysis cannot establish runtime permission use or intent."],
+                location={
+                    "evidence_type": "manifest_permission_declaration",
+                    "confidence": "high",
+                    "matched_permissions": [permission],
+                    "source_files": ["AndroidManifest.xml"],
+                },
             )
             finding_count += 1
     for component in state.manifest.get("components", []):
@@ -700,9 +884,15 @@ def _findings(state: AnalysisState) -> tuple[int, str]:
                 f"{component['type'].capitalize()} {component['name']} is explicitly exported in the manifest.",
                 state.artifact_ids.get("manifest", []),
                 ["Exported status alone does not prove exploitability; intent filters and permission controls need review."],
-                location={"manifest_component": component["name"]},
+                location={
+                    "evidence_type": "manifest_component_declaration",
+                    "confidence": "high",
+                    "manifest_component": component["name"],
+                    "source_files": ["AndroidManifest.xml"],
+                },
             )
             finding_count += 1
+    finding_count += _behavior_findings(state)
     with transaction() as connection:
         severities = [row[0] for row in connection.execute("SELECT severity FROM findings WHERE job_id = ?", (state.job_id,)).fetchall()]
     points = {"informational": 0, "low": 5, "medium": 15, "high": 30, "critical": 50}

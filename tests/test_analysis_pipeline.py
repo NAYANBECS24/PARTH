@@ -16,6 +16,7 @@ def run_isolated(script: str, tmp_path: Path) -> dict:
     environment["SHADOWPATH_DATABASE_URL"] = str(tmp_path / "data" / "shadowpath.db")
     environment["SHADOWPATH_AUTH_DISABLED"] = "false"
     environment["SHADOWPATH_ENABLE_NVIDIA"] = "false"
+    environment["SHADOWPATH_DISABLE_MOBSF"] = "true"
     completed = subprocess.run(
         [sys.executable, "-c", script],
         cwd=ROOT,
@@ -66,6 +67,53 @@ print(json.dumps({'job': job['status'], 'findings': findings, 'blindspots': blin
     assert result["findings"] >= 2
     assert result["blindspots"] >= 3
     assert result["verification"] is True
+
+
+def test_static_behavior_rules_preserve_technique_and_signal_evidence(tmp_path: Path) -> None:
+    result = run_isolated(
+        """
+import hashlib, json, zipfile
+from pathlib import Path
+from backend.config import settings
+from backend.database import initialise_database, transaction
+from backend.intake import StoredUpload
+from backend.repository import create_case_and_job
+from backend.analyzer import run_analysis
+
+initialise_database()
+apk = settings.upload_dir / 'behavior-fixture.apk'
+manifest = b'''<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="behavior.fixture"><uses-permission android:name="android.permission.SEND_SMS"/><uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/><application/></manifest>'''
+dex = b'dex\\n035\\x00 SmsManager sendTextMessage DexClassLoader PathClassLoader AccessibilityService onAccessibilityEvent TYPE_VIEW_TEXT_CHANGED MediaProjection createVirtualDisplay TYPE_APPLICATION_OVERLAY frida '
+with zipfile.ZipFile(apk, 'w') as archive:
+    archive.writestr('AndroidManifest.xml', manifest)
+    archive.writestr('classes.dex', dex)
+sha = hashlib.sha256(apk.read_bytes()).hexdigest()
+target = settings.upload_dir / f'{sha}.apk'
+apk.rename(target)
+upload = StoredUpload(sha, target.stat().st_size, 'behavior-fixture.apk', target, 2)
+case_id, job_id, _ = create_case_and_job(upload, 'Static behavior fixture', '', 'standard', False, False)
+run_analysis(job_id)
+with transaction() as connection:
+    rows = connection.execute("SELECT rule_id, evidence_status, location_json FROM findings WHERE job_id = ? AND rule_id >= 'SP-APK-101' ORDER BY rule_id", (job_id,)).fetchall()
+records = {row['rule_id']: {'status': row['evidence_status'], 'location': json.loads(row['location_json'])} for row in rows}
+print(json.dumps(records))
+""",
+        tmp_path,
+    )
+    assert set(result) == {
+        "SP-APK-101",
+        "SP-APK-102",
+        "SP-APK-103",
+        "SP-APK-104",
+        "SP-APK-105",
+        "SP-APK-106",
+        "SP-APK-107",
+    }
+    assert result["SP-APK-101"]["status"] == "observed"
+    assert result["SP-APK-101"]["location"]["technique"]["id"] == "T1407"
+    assert result["SP-APK-103"]["location"]["technique"]["id"] == "T1417.001"
+    assert result["SP-APK-104"]["location"]["matched_permissions"] == ["android.permission.SEND_SMS"]
+    assert result["SP-APK-107"]["location"]["confidence"] == "low"
 
 
 def test_invalid_archive_is_rejected(tmp_path: Path) -> None:

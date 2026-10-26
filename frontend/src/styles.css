@@ -751,3 +751,26 @@ h3 { font-weight: 650; }
   .auth-boundary-strip { flex-direction: column; gap: 7px; }
   .auth-card { padding: 24px 20px; }
 }
+
+.finding-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -3px 0 12px;
+}
+
+.finding-evidence span {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  font-size: 10px;
+  line-height: 1.35;
+  padding: 3px 6px;
+}
+
+.finding-evidence strong,
+.finding-evidence code {
+  color: var(--accent);
+  font-size: inherit;
+}

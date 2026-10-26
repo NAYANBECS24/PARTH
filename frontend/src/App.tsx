@@ -2045,6 +2045,46 @@ function ReportsTab({ records }: { records: ReportRecord[] }) {
   );
 }
 
+function FindingEvidence({ finding }: { finding: Finding }) {
+  const location = finding.location ?? {};
+  const technique = location.technique;
+  const matchedTerms = location.matched_terms ?? [];
+  const matchedPermissions = location.matched_permissions ?? [];
+  const sourceFiles = location.source_files ?? [];
+  if (
+    !location.confidence &&
+    !technique?.id &&
+    !matchedTerms.length &&
+    !matchedPermissions.length &&
+    !location.manifest_component
+  ) {
+    return null;
+  }
+  return (
+    <div className="finding-evidence" aria-label="Evidence detail">
+      {location.confidence ? (
+        <span>
+          Static confidence <strong>{location.confidence}</strong>
+        </span>
+      ) : null}
+      {technique?.id ? (
+        <span>
+          {technique.framework ?? "MITRE ATT&CK"} <code>{technique.id}</code>
+          {technique.name ? ` · ${technique.name}` : ""}
+        </span>
+      ) : null}
+      {matchedTerms.length ? <span>Signals: {matchedTerms.join(", ")}</span> : null}
+      {matchedPermissions.length ? (
+        <span>Permission: {matchedPermissions.join(", ")}</span>
+      ) : null}
+      {location.manifest_component ? (
+        <span>Component: {location.manifest_component}</span>
+      ) : null}
+      {sourceFiles.length ? <span>Source: {sourceFiles.join(", ")}</span> : null}
+    </div>
+  );
+}
+
 function FindingList({
   findings,
   reload,
@@ -2070,6 +2110,7 @@ function FindingList({
           </div>
           <h3>{finding.title}</h3>
           <p>{finding.description}</p>
+          <FindingEvidence finding={finding} />
           <div className="finding-footer">
             <span>
               {finding.artifact_ids.length} evidence artifact

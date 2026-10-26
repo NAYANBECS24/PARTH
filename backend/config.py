@@ -106,8 +106,9 @@ def get_settings() -> Settings:
     default_auth_disabled = "true" if is_serverless else "false"
     auth_disabled = os.getenv("SHADOWPATH_AUTH_DISABLED", default_auth_disabled).lower() == "true"
 
-    mobsf_api_url = os.getenv("MOBSF_API_URL", "").strip().rstrip("/") or None
-    mobsf_api_key = os.getenv("MOBSF_API_KEY", "").strip() or None
+    mobsf_disabled = os.getenv("SHADOWPATH_DISABLE_MOBSF", "false").lower() == "true"
+    mobsf_api_url = None if mobsf_disabled else (os.getenv("MOBSF_API_URL", "").strip().rstrip("/") or None)
+    mobsf_api_key = None if mobsf_disabled else (os.getenv("MOBSF_API_KEY", "").strip() or None)
 
     settings = Settings(
         data_dir=data_dir,

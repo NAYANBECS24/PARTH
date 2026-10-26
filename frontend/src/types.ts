@@ -57,6 +57,20 @@ export interface JobEvent {
   created_at: string;
 }
 
+export interface FindingLocation {
+  evidence_type?: string;
+  confidence?: "low" | "medium" | "high";
+  matched_terms?: string[];
+  matched_permissions?: string[];
+  source_files?: string[];
+  manifest_component?: string;
+  technique?: {
+    framework?: string;
+    id?: string;
+    name?: string;
+  };
+}
+
 export interface Finding {
   id: string;
   rule_id: string;
@@ -67,6 +81,7 @@ export interface Finding {
   description: string;
   limitations: string[];
   artifact_ids: string[];
+  location: FindingLocation;
   reviewer_status: string;
 }
 
