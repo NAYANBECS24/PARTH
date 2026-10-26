@@ -149,6 +149,27 @@ and the isolated-lab ADB client as ready. An attached emulator is intentionally 
 treated as a safe dynamic-analysis environment until it is isolated from the host and
 network.
 
+#### Optional isolated MobSF static cross-validation
+
+This starts MobSF only on the loopback interface, generates a private API key in the
+ignored `.mobsf.env` file, and enables bounded MobSF report digests in the local
+analysis worker:
+
+```powershell
+.\scripts\configure-mobsf.ps1
+.\scripts\host-free.ps1
+```
+
+For the container stack, start the same optional service with:
+
+```bash
+docker compose -f docker-compose.yml -f deploy/docker-compose.mobsf.yml up --build
+```
+
+Dynamic APK execution is deliberately not enabled by this script. It requires an
+external disposable Android emulator or dedicated device on an isolated network; do
+not attach an untrusted runtime to the analyst workstation.
+
 ### Option C: Full toolchain container deployment (recommended for a real server)
 
 The Vercel deployment is a serverless static-analysis demo. For persistent uploads,

@@ -1,4 +1,5 @@
 .env
+.mobsf.env
 .venv/
 .toolcache/
 __pycache__/

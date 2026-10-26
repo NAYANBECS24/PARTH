@@ -16,6 +16,7 @@ from backend.adapters import ReverseEngineeringToolchain, Z3GuardEvaluator
 from backend.ai_provider import NvidiaNimProvider
 from backend.database import get_connection, transaction
 from backend.intake import validate_archive
+from backend.mobsf import MobSFClient, MobSFError
 from backend.repository import (
     STAGES,
     add_artifact,
@@ -457,7 +458,60 @@ def _blindspot_ledger(state: AnalysisState) -> None:
             "NVIDIA TRI-PROOF was requested, but a complete provider configuration was unavailable; no cloud model was called.",
             "Provide a rotated NVIDIA_API_KEY through the secure startup prompt and retry this job.",
         )
+    _mobsf_cross_validate(state)
     _finish_stage(state, "blindspot_ledger", detail={"native_libraries": len(native), "certificates": len(certificate_names)})
+
+
+def _mobsf_cross_validate(state: AnalysisState) -> None:
+    """Optionally cross-check an APK with the isolated MobSF static service.
+
+    MobSF observations remain a separately attributable artifact. They are not
+    silently promoted to first-party findings because its rules, versions, and
+    data model are independent of the deterministic local pipeline.
+    """
+    if not settings.mobsf_configured:
+        return
+    assert settings.mobsf_api_url is not None
+    assert settings.mobsf_api_key is not None
+    try:
+        report = MobSFClient(
+            settings.mobsf_api_url,
+            settings.mobsf_api_key,
+            settings.mobsf_timeout_seconds,
+        ).scan_apk(state.apk_path)
+    except MobSFError as error:
+        add_blindspot(
+            state.case_id,
+            state.job_id,
+            "cross_validation",
+            "mobsf-static",
+            "MOBSF_STATIC_CROSS_VALIDATION_UNAVAILABLE",
+            f"Configured MobSF static cross-validation did not complete: {str(error)[:500]}",
+            "Inspect the isolated MobSF service, then retry the case. Local static results remain separately available.",
+        )
+        state.partial = True
+        log_event(state.job_id, "warning", "MobSF cross-validation was unavailable; no external result was recorded.")
+        return
+    artifact_id = add_artifact(
+        state.case_id,
+        state.job_id,
+        "mobsf_static_cross_validation",
+        "MobSF static cross-validation",
+        f"mobsf:/api/v1/scan/{report.scan_hash}",
+        {
+            "summary": report.summary,
+            "report_sha256": report.report_sha256,
+            "evidence_policy": "External MobSF output is preserved as a cross-validation artifact and is not automatically converted into local findings.",
+        },
+        report.report_sha256,
+    )
+    state.remember("mobsf", artifact_id)
+    log_event(
+        state.job_id,
+        "info",
+        "MobSF static cross-validation completed and its bounded report digest was preserved.",
+        {"artifact_id": artifact_id, "scan_hash": report.scan_hash},
+    )
 
 
 def _guarded_paths(state: AnalysisState) -> None:

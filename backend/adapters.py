@@ -157,16 +157,14 @@ class ReverseEngineeringToolchain:
 
     @classmethod
     def detect_mobsf(cls) -> ToolStatus:
-        mobsf_url = os.environ.get("MOBSF_API_URL")
-        mobsf_key = os.environ.get("MOBSF_API_KEY")
-        if mobsf_url and mobsf_key:
+        if settings.mobsf_configured:
             return ToolStatus(
                 name="MobSF Security Framework",
                 category="integrated_analyzer",
                 status="configured",
-                details="MobSF REST endpoint and API credentials are configured. The external service remains isolated from this host.",
+                details="MobSF static cross-validation is configured. The analysis worker sends APKs only to the isolated configured service and records a bounded report digest.",
             )
-        if mobsf_url:
+        if settings.mobsf_api_url:
             return ToolStatus(
                 name="MobSF Security Framework",
                 category="integrated_analyzer",

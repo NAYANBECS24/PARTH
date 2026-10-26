@@ -9,6 +9,11 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
+# Created only by scripts/configure-mobsf.ps1 and intentionally ignored by Git.
+# A complete explicit shell/.env configuration retains precedence. Otherwise the
+# generated local pair replaces empty placeholder values from .env.example.
+if not (os.getenv("MOBSF_API_URL") and os.getenv("MOBSF_API_KEY")):
+    load_dotenv(ROOT / ".mobsf.env", override=True)
 
 
 def _is_serverless_environment() -> bool:
@@ -32,6 +37,9 @@ class Settings:
     data_dir: Path
     database_path: Path
     toolchain_dir: Path
+    mobsf_api_url: str | None
+    mobsf_api_key: str | None
+    mobsf_timeout_seconds: float
     max_upload_bytes: int
     max_archive_entries: int
     max_uncompressed_bytes: int
@@ -51,6 +59,10 @@ class Settings:
     @property
     def nvidia_configured(self) -> bool:
         return self.enable_nvidia and bool(self.nvidia_api_key) and bool(self.nvidia_model)
+
+    @property
+    def mobsf_configured(self) -> bool:
+        return bool(self.mobsf_api_url and self.mobsf_api_key)
 
     @property
     def upload_dir(self) -> Path:
@@ -94,10 +106,16 @@ def get_settings() -> Settings:
     default_auth_disabled = "true" if is_serverless else "false"
     auth_disabled = os.getenv("SHADOWPATH_AUTH_DISABLED", default_auth_disabled).lower() == "true"
 
+    mobsf_api_url = os.getenv("MOBSF_API_URL", "").strip().rstrip("/") or None
+    mobsf_api_key = os.getenv("MOBSF_API_KEY", "").strip() or None
+
     settings = Settings(
         data_dir=data_dir,
         database_path=database_path,
         toolchain_dir=_path_setting("SHADOWPATH_TOOLCHAIN_DIR", ".toolcache"),
+        mobsf_api_url=mobsf_api_url,
+        mobsf_api_key=mobsf_api_key,
+        mobsf_timeout_seconds=max(10.0, min(float(os.getenv("MOBSF_TIMEOUT_SECONDS", "180")), 600.0)),
         max_upload_bytes=int(os.getenv("SHADOWPATH_MAX_UPLOAD_BYTES", "104857600")),
         max_archive_entries=int(os.getenv("SHADOWPATH_MAX_ARCHIVE_ENTRIES", "12000")),
         max_uncompressed_bytes=int(os.getenv("SHADOWPATH_MAX_UNCOMPRESSED_BYTES", "536870912")),

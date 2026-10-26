@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [ValidateRange(1024, 65535)][int]$ApiPort = 8000,
-  [ValidateRange(1024, 65535)][int]$WebPort = 5173
+  [ValidateRange(1024, 65535)][int]$WebPort = 5173,
+  [ValidateRange(1024, 65535)][int]$MobsfPort = 8001
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +46,17 @@ if (-not $cloudflared) {
 Assert-PortFree $ApiPort
 Assert-PortFree $WebPort
 Set-Location $projectRoot
+
+# configure-mobsf.ps1 writes this ignored file. Keeping the key outside the
+# repository lets the API and worker use only the loopback-isolated service.
+$mobsfConfig = Join-Path $projectRoot ".mobsf.env"
+if (Test-Path $mobsfConfig) {
+  $mobsfKeyLine = Get-Content -LiteralPath $mobsfConfig | Where-Object { $_ -match '^MOBSF_API_KEY=' } | Select-Object -First 1
+  if ($mobsfKeyLine) {
+    $env:MOBSF_API_KEY = $mobsfKeyLine.Substring("MOBSF_API_KEY=".Length).Trim()
+    $env:MOBSF_API_URL = "http://127.0.0.1:$MobsfPort"
+  }
+}
 
 $tunnelLog = Join-Path $env:TEMP "shadowpath-cloudflared-$([guid]::NewGuid().ToString('N')).log"
 $tunnelError = "$tunnelLog.err"

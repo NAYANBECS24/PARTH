@@ -1,0 +1,39 @@
+services:
+  api:
+    env_file:
+      - .env
+      - .mobsf.env
+    environment:
+      MOBSF_API_URL: http://mobsf:8000
+
+  worker:
+    env_file:
+      - .env
+      - .mobsf.env
+    environment:
+      MOBSF_API_URL: http://mobsf:8000
+
+  mobsf-init:
+    image: opensecurity/mobile-security-framework-mobsf:latest
+    user: root
+    entrypoint: ["/bin/bash", "-lc"]
+    command: ["mkdir -p /data && chown -R 9901:9901 /data"]
+    volumes:
+      - mobsf_data:/data
+    restart: "no"
+
+  mobsf:
+    image: opensecurity/mobile-security-framework-mobsf:latest
+    env_file:
+      - .mobsf.env
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - mobsf_data:/home/mobsf/.MobSF
+    depends_on:
+      mobsf-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  mobsf_data:
