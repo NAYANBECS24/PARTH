@@ -19,6 +19,8 @@ import type {
 const API_BASE =
   import.meta.env.VITE_API_BASE !== undefined
     ? import.meta.env.VITE_API_BASE
+    : import.meta.env.VITE_USE_PROXY === "true"
+      ? ""
     : import.meta.env.DEV
       ? "http://127.0.0.1:8000"
       : "";

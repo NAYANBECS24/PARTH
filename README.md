@@ -164,6 +164,20 @@ an Ubuntu VM with an encrypted persistent disk. Keep an external MobSF instance 
 an Android emulator/Frida lab on a separately isolated network; never attach an
 untrusted APK runtime to the application server.
 
+### Option D: Free public link from this workstation
+
+For a no-cost demonstration link, install Cloudflare Tunnel and run:
+
+```powershell
+.\scripts\install-local-toolchain.ps1
+winget install --id Cloudflare.cloudflared --exact
+.\scripts\host-free.ps1
+```
+
+The script starts the complete local API, worker and Vite proxy, then prints a public
+`trycloudflare.com` HTTPS address. The host PC must stay powered on and the script must
+remain running. This is suitable for a hackathon demo, not for long-term evidence hosting.
+
 #### 2. Manual Terminal Launch
 **Terminal 1 — Backend API & Worker:**
 ```bash
