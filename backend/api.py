@@ -198,7 +198,10 @@ def health() -> dict[str, Any]:
             "zip_inventory": "available",
             "androguard": androguard_status,
             "nvidia": "configured" if settings.nvidia_configured else "missing_key" if settings.enable_nvidia else "not_configured",
-            "dynamic_lab": "isolated_ready" if dynamic_lab.get("path") else "not_configured",
+            # ADB is only a client. An untrusted APK must never be launched on
+            # this host, so report the dynamic capability as isolated until a
+            # separately quarantined emulator/device is connected.
+            "dynamic_lab": "isolated" if dynamic_lab.get("path") else "not_configured",
         },
     }
 
