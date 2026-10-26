@@ -89,6 +89,20 @@ except HTTPException as error:
     assert result == {"status": 422, "code": "invalid_apk"}
 
 
+def test_api_import_initialises_database_before_the_first_request(tmp_path: Path) -> None:
+    result = run_isolated(
+        """
+import json
+from backend.api import app
+from backend.auth import bootstrap_required
+
+print(json.dumps({'title': app.title, 'bootstrap_required': bootstrap_required()}))
+""",
+        tmp_path,
+    )
+    assert result == {"title": "SHADOWPATH Ω — NEXUS API", "bootstrap_required": True}
+
+
 def test_capsule_verifier_rejects_tampered_content(tmp_path: Path) -> None:
     result = run_isolated(
         """

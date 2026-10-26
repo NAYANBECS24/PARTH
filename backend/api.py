@@ -65,6 +65,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+# Do not rely only on FastAPI's lifespan hook for schema setup. Some serverless
+# adapters handle a request without first running the lifespan protocol, which
+# would otherwise make the first authentication request fail with SQLite's
+# "no such table" error. The operation is idempotent and uses the writable
+# /tmp database configured for Vercel.
+initialise_database()
+
+
 app = FastAPI(title="SHADOWPATH Ω — NEXUS API", version="0.2.0", lifespan=lifespan)
 is_vercel = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
 app.add_middleware(
