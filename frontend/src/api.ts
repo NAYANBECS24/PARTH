@@ -166,6 +166,64 @@ export interface Comparison {
   };
   limitation: string;
 }
+export interface SourceWorkspaceFile {
+  path: string;
+  language: string;
+  byte_size: number;
+  viewable: boolean;
+}
+export interface SourceWorkspace {
+  case_id: string;
+  sample_sha256: string;
+  state: "ready" | "not_generated" | "unavailable";
+  generated: boolean;
+  tool: {
+    status: string;
+    version?: string | null;
+    details: string;
+    remediation?: string | null;
+  };
+  files: SourceWorkspaceFile[];
+  limits: { max_files: number; max_viewable_file_bytes: number };
+}
+export interface SourceFileContent {
+  path: string;
+  language: string;
+  byte_size: number;
+  content: string;
+}
+export interface IntelligenceRelationship {
+  kind: "indicator" | "certificate" | "rule";
+  value: string;
+  label: string;
+  case_count: number;
+  cases: Array<{ id: string; title: string }>;
+}
+export interface IntelligenceCorrelations {
+  items: IntelligenceRelationship[];
+  limitation: string;
+}
+export interface ThreatIntelObservation {
+  id: string;
+  provider: string;
+  subject_type: string;
+  subject_value: string;
+  status: "found" | "not_found" | "error";
+  summary: Record<string, unknown>;
+  observed_at: string;
+}
+export interface CaseReputation {
+  case_id: string;
+  sample_sha256: string;
+  provider: {
+    name: string;
+    status: string;
+    details: string;
+    remediation?: string | null;
+  };
+  observations: ThreatIntelObservation[];
+  boundary: string;
+}
 export interface AuditEvent {
   id: number;
   username: string | null;
@@ -245,6 +303,15 @@ export const api = {
     request<Comparison>(
       `/api/compare?left=${encodeURIComponent(left)}&right=${encodeURIComponent(right)}`,
     ),
+  correlations: () =>
+    request<IntelligenceCorrelations>("/api/intelligence/correlations"),
+  reputation: (caseId: string) =>
+    request<CaseReputation>(`/api/cases/${caseId}/intelligence/reputation`),
+  refreshReputation: (caseId: string) =>
+    request<{ case_id: string; observation: ThreatIntelObservation }>(
+      `/api/cases/${caseId}/intelligence/reputation`,
+      { method: "POST" },
+    ),
   settings: () => request<AppSettings>("/api/settings"),
   saveSettings: (default_profile: "lite" | "standard" | "advanced") =>
     request<AppSettings>("/api/settings", {
@@ -265,6 +332,18 @@ export const api = {
       }>;
       limited: boolean;
     }>(`/api/cases/${caseId}/graph`),
+  sourceWorkspace: (caseId: string, search = "") =>
+    request<SourceWorkspace>(
+      `/api/cases/${caseId}/source?search=${encodeURIComponent(search)}`,
+    ),
+  generateSourceWorkspace: (caseId: string) =>
+    request<SourceWorkspace>(`/api/cases/${caseId}/source/index`, {
+      method: "POST",
+    }),
+  sourceContent: (caseId: string, path: string) =>
+    request<SourceFileContent>(
+      `/api/cases/${caseId}/source/content?path=${encodeURIComponent(path)}`,
+    ),
   async intake(form: FormData) {
     return request<{
       case_id: string;

@@ -176,6 +176,17 @@ CREATE TABLE IF NOT EXISTS ai_proposals (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS threat_intel_observations (
+  id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  subject_type TEXT NOT NULL,
+  subject_value TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('found', 'not_found', 'error')),
+  summary_json TEXT NOT NULL DEFAULT '{}',
+  observed_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -241,6 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_proposals_case ON ai_proposals(case_id, create
 CREATE INDEX IF NOT EXISTS idx_guard_paths_case ON guard_paths(case_id, solver_status);
 CREATE INDEX IF NOT EXISTS idx_assistant_threads_user ON assistant_threads(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assistant_messages_thread ON assistant_messages(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_threat_intel_case ON threat_intel_observations(case_id, provider, observed_at DESC);
 """
 
 

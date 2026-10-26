@@ -181,6 +181,23 @@ class ReverseEngineeringToolchain:
         )
 
     @classmethod
+    def detect_virustotal(cls) -> ToolStatus:
+        if settings.virustotal_configured:
+            return ToolStatus(
+                name="VirusTotal Hash Reputation",
+                category="threat_intelligence",
+                status="configured",
+                details="Analyst-initiated hash-only reputation lookups are enabled. Samples and extracted IoC values are not uploaded automatically.",
+            )
+        return ToolStatus(
+            name="VirusTotal Hash Reputation",
+            category="threat_intelligence",
+            status="not_configured",
+            details="No VirusTotal API key is configured. Local static evidence and cross-case correlation remain available offline.",
+            remediation="Set VIRUSTOTAL_API_KEY to enable deliberate hash-only reputation lookups from an investigation.",
+        )
+
+    @classmethod
     def detect_dynamic_lab(cls) -> ToolStatus:
         adb_binary = cls._tool_binary("adb.exe", "adb") if os.name == "nt" else cls._tool_binary("adb", "adb.exe")
         client_state = "ADB client is installed and ready to connect to an explicitly configured isolated emulator or dedicated device." if adb_binary else "ADB client is not installed; no isolated Android runtime can be contacted."
@@ -230,6 +247,7 @@ class ReverseEngineeringToolchain:
                 "aapt2": cls.detect_aapt2().__dict__,
                 "apksigner": cls.detect_apksigner().__dict__,
                 "mobsf": cls.detect_mobsf().__dict__,
+                "virustotal": cls.detect_virustotal().__dict__,
                 "dynamic_lab": cls.detect_dynamic_lab().__dict__,
             },
             "environment": {

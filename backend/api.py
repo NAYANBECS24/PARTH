@@ -26,6 +26,8 @@ from backend.database import get_connection, initialise_database, transaction, u
 from backend.intake import store_upload
 from backend.reports import verify_capsule
 from backend.repository import create_case_and_job, create_retry_job, identifier, json_value, request_cancel
+from backend.source_workspace import JadxSourceWorkspace, SourceWorkspaceError
+from backend.threat_intel import ThreatIntelError, VirusTotalClient, observations_for_case, record_observation
 
 
 def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -57,6 +59,18 @@ def _job_or_404(job_id: str) -> dict[str, Any]:
     if not row:
         raise HTTPException(404, "Job not found")
     return dict(row)
+
+
+def _case_apk_path(case_id: str) -> Path:
+    with transaction() as connection:
+        row = connection.execute(
+            """SELECT samples.storage_path FROM cases
+               JOIN samples ON samples.sha256 = cases.sample_sha256 WHERE cases.id = ?""",
+            (case_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Case not found")
+    return Path(row["storage_path"])
 
 
 @asynccontextmanager
@@ -414,6 +428,77 @@ def get_case(case_id: str) -> dict[str, Any]:
     }
 
 
+@app.get("/api/cases/{case_id}/source")
+def source_workspace_status(
+    case_id: str,
+    search: str = Query(default="", max_length=120),
+    limit: int = Query(default=300, ge=1, le=1600),
+) -> dict[str, Any]:
+    case = _case_or_404(case_id)
+    try:
+        return {
+            "case_id": case_id,
+            "sample_sha256": case["sample_sha256"],
+            **JadxSourceWorkspace.status(case["sample_sha256"], search, limit),
+        }
+    except SourceWorkspaceError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.post("/api/cases/{case_id}/source/index")
+def generate_source_workspace(case_id: str, request: Request) -> dict[str, Any]:
+    case = _case_or_404(case_id)
+    try:
+        result = JadxSourceWorkspace.generate(case["sample_sha256"], _case_apk_path(case_id))
+    except SourceWorkspaceError as error:
+        raise HTTPException(409, {"code": "source_workspace_unavailable", "message": str(error)}) from error
+    audit(request.state.user["id"], "source_workspace.generate", "case", case_id, {"sample_sha256": case["sample_sha256"], "files": len(result["files"])})
+    return {"case_id": case_id, "sample_sha256": case["sample_sha256"], **result}
+
+
+@app.get("/api/cases/{case_id}/source/content")
+def source_workspace_content(case_id: str, source_path: str = Query(alias="path", min_length=1, max_length=500)) -> dict[str, Any]:
+    case = _case_or_404(case_id)
+    try:
+        return JadxSourceWorkspace.read(case["sample_sha256"], source_path)
+    except SourceWorkspaceError as error:
+        raise HTTPException(404, str(error)) from error
+
+
+@app.get("/api/cases/{case_id}/intelligence/reputation")
+def case_reputation(case_id: str) -> dict[str, Any]:
+    case = _case_or_404(case_id)
+    tool = ReverseEngineeringToolchain.detect_virustotal()
+    return {
+        "case_id": case_id,
+        "sample_sha256": case["sample_sha256"],
+        "provider": {"name": tool.name, "status": tool.status, "details": tool.details, "remediation": tool.remediation},
+        "observations": observations_for_case(case_id),
+        "boundary": "Hash-only lookup is analyst-initiated. APK bytes and extracted indicators are not uploaded by this feature.",
+    }
+
+
+@app.post("/api/cases/{case_id}/intelligence/reputation")
+def refresh_case_reputation(case_id: str, request: Request) -> dict[str, Any]:
+    case = _case_or_404(case_id)
+    if not settings.virustotal_configured:
+        raise HTTPException(409, {"code": "virustotal_not_configured", "message": "VirusTotal is not configured. Set VIRUSTOTAL_API_KEY before requesting an external hash lookup."})
+    try:
+        result = VirusTotalClient().lookup_file(case["sample_sha256"])
+    except ThreatIntelError as error:
+        raise HTTPException(502, {"code": "virustotal_unavailable", "message": str(error)}) from error
+    observation = record_observation(
+        case_id,
+        "virustotal",
+        "sha256",
+        case["sample_sha256"],
+        result["status"],
+        result["summary"],
+    )
+    audit(request.state.user["id"], "threat_intel.hash_lookup", "case", case_id, {"provider": "virustotal", "subject_type": "sha256", "status": result["status"]})
+    return {"case_id": case_id, "observation": observation}
+
+
 @app.get("/api/cases/{case_id}/paths")
 def get_case_paths(case_id: str) -> dict[str, Any]:
     _case_or_404(case_id)
@@ -645,6 +730,65 @@ def compare_cases(left: str = Query(...), right: str = Query(...)) -> dict[str, 
         "indicator_diff": {kind: {"shared": sorted(left_iocs[kind] & right_iocs[kind]), "left_only": sorted(left_iocs[kind] - right_iocs[kind]), "right_only": sorted(right_iocs[kind] - left_iocs[kind])} for kind in left_iocs},
         "finding_rules": {"shared": sorted(left_findings & right_findings), "left_only": sorted(left_findings - right_findings), "right_only": sorted(right_findings - left_findings)},
         "limitation": "Shared static artifacts are evidence-backed relationships, not attribution to an actor or malware family.",
+    }
+
+
+@app.get("/api/intelligence/correlations")
+def intelligence_correlations(limit: int = Query(default=60, ge=1, le=200)) -> dict[str, Any]:
+    """Return deterministic, cross-case relationships without family attribution."""
+    with transaction() as connection:
+        indicator_rows = connection.execute(
+            """SELECT indicator_type, value, GROUP_CONCAT(DISTINCT case_id) AS case_ids,
+                      COUNT(DISTINCT case_id) AS case_count
+               FROM indicators GROUP BY indicator_type, value
+               HAVING COUNT(DISTINCT case_id) > 1
+               ORDER BY case_count DESC, indicator_type, value LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        certificate_rows = connection.execute(
+            """SELECT sha256 AS value, GROUP_CONCAT(DISTINCT case_id) AS case_ids,
+                      COUNT(DISTINCT case_id) AS case_count
+               FROM artifacts WHERE artifact_type = 'certificate_blob' AND sha256 IS NOT NULL
+               GROUP BY sha256 HAVING COUNT(DISTINCT case_id) > 1
+               ORDER BY case_count DESC, sha256 LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        rule_rows = connection.execute(
+            """SELECT rule_id AS value, GROUP_CONCAT(DISTINCT case_id) AS case_ids,
+                      COUNT(DISTINCT case_id) AS case_count
+               FROM findings GROUP BY rule_id HAVING COUNT(DISTINCT case_id) > 1
+               ORDER BY case_count DESC, rule_id LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        title_rows = connection.execute("SELECT id, title FROM cases").fetchall()
+    titles = {row["id"]: row["title"] for row in title_rows}
+
+    def relationship(kind: str, value: str, case_ids: str, case_count: int, label: str) -> dict[str, Any]:
+        ids = [case_id for case_id in case_ids.split(",") if case_id]
+        return {
+            "kind": kind,
+            "value": value,
+            "label": label,
+            "case_count": case_count,
+            "cases": [{"id": case_id, "title": titles.get(case_id, "Unknown case")} for case_id in ids],
+        }
+
+    relationships = [
+        relationship("indicator", row["value"], row["case_ids"], row["case_count"], f"{row['indicator_type'].upper()} indicator")
+        for row in indicator_rows
+    ]
+    relationships.extend(
+        relationship("certificate", row["value"], row["case_ids"], row["case_count"], "Shared signing-certificate blob")
+        for row in certificate_rows
+    )
+    relationships.extend(
+        relationship("rule", row["value"], row["case_ids"], row["case_count"], "Shared static rule")
+        for row in rule_rows
+    )
+    relationships.sort(key=lambda item: (-item["case_count"], item["kind"], item["value"]))
+    return {
+        "items": relationships[:limit],
+        "limitation": "A shared static indicator, certificate blob, or rule is a review lead only. It does not establish a malware family, common author, campaign, or actor attribution.",
     }
 
 

@@ -53,12 +53,16 @@ import {
   type AuditEvent,
   type AuthUser,
   type CaseDetail,
+  type CaseReputation,
   type Comparison,
   type Health,
+  type IntelligenceCorrelations,
   type JobDetail,
   type LibraryIndicator,
   type Overview,
   type SampleRecord,
+  type SourceFileContent,
+  type SourceWorkspace,
 } from "./api";
 import { dateTime, fileSize, shortHash, statusLabel } from "./lib";
 import type {
@@ -77,6 +81,7 @@ type Navigate = (path: string) => void;
 type Tab =
   | "summary"
   | "genome"
+  | "source"
   | "behaviour"
   | "blindspots"
   | "ai"
@@ -1457,6 +1462,7 @@ function CasePage({ id, navigate }: { id: string; navigate: Navigate }) {
   const tabs: Array<[Tab, string]> = [
     ["summary", "Summary"],
     ["genome", "Static genome"],
+    ["source", "Source workspace"],
     [
       "behaviour",
       `Behaviour & paths (${detail.guard_paths?.length ?? 0})`,
@@ -1528,6 +1534,7 @@ function CasePage({ id, navigate }: { id: string; navigate: Navigate }) {
           <SummaryTab detail={detail} navigate={navigate} />
         )}
         {tab === "genome" && <GenomeTab detail={detail} />}
+        {tab === "source" && <SourceWorkspaceTab caseId={id} />}
         {tab === "behaviour" && <BehaviourTab detail={detail} />}
         {tab === "blindspots" && <BlindspotTab records={detail.blindspots} />}
         {tab === "ai" && <TriProofTab records={detail.ai_proposals} />}
@@ -1682,6 +1689,166 @@ function GenomeTab({ detail }: { detail: CaseDetail }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function SourceWorkspaceTab({ caseId }: { caseId: string }) {
+  const [workspace, setWorkspace] = useState<SourceWorkspace | null>(null);
+  const [selected, setSelected] = useState<SourceFileContent | null>(null);
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+  const [building, setBuilding] = useState(false);
+
+  const load = () => {
+    setError("");
+    api
+      .sourceWorkspace(caseId)
+      .then((result) => setWorkspace(result))
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Unable to load source workspace status",
+        ),
+      );
+  };
+
+  useEffect(() => {
+    setWorkspace(null);
+    setSelected(null);
+    setSearch("");
+    load();
+  }, [caseId]);
+
+  const files = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return (workspace?.files ?? []).filter(
+      (file) => !query || file.path.toLowerCase().includes(query),
+    );
+  }, [workspace, search]);
+
+  async function generate() {
+    setBuilding(true);
+    setError("");
+    try {
+      const result = await api.generateSourceWorkspace(caseId);
+      setWorkspace(result);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "JADX source recovery did not complete",
+      );
+    } finally {
+      setBuilding(false);
+    }
+  }
+
+  async function openFile(path: string) {
+    setError("");
+    try {
+      setSelected(await api.sourceContent(caseId, path));
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to open recovered source",
+      );
+    }
+  }
+
+  if (error && !workspace) return <ErrorPanel error={error} retry={load} />;
+  if (!workspace) return <Loading />;
+  const available = workspace.tool.status === "available";
+  return (
+    <div className="source-workspace">
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">JADX SOURCE WORKSPACE</p>
+            <h2>Recovered source review</h2>
+          </div>
+          <StatusPill value={workspace.state} />
+        </div>
+        <p className="page-description">
+          Source recovery is on-demand, static-only, and isolated to the local
+          toolchain. Recovered code is review material, not execution evidence.
+        </p>
+        <div className="source-workspace-actions">
+          {!workspace.generated ? (
+            <button
+              className="primary-button"
+              disabled={!available || building}
+              onClick={() => void generate()}
+            >
+              {building ? <LoaderCircle className="spin" size={16} /> : <BookOpen size={16} />}
+              {building ? "Recovering source…" : "Generate source workspace"}
+            </button>
+          ) : (
+            <span className="factual-note">
+              {workspace.files.length} indexed files · files over {fileSize(workspace.limits.max_viewable_file_bytes)} remain listed but are not opened.
+            </span>
+          )}
+          {!available && workspace.tool.remediation ? (
+            <span className="factual-note">{workspace.tool.remediation}</span>
+          ) : null}
+        </div>
+        {error ? <ErrorPanel error={error} retry={load} /> : null}
+      </section>
+
+      {workspace.generated ? (
+        <section className="source-workspace-grid">
+          <aside className="panel source-file-list">
+            <div className="table-toolbar">
+              <label className="search-field">
+                <Search size={16} />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Filter recovered files"
+                />
+              </label>
+            </div>
+            <div className="source-file-rows">
+              {files.map((file) => (
+                <button
+                  key={file.path}
+                  disabled={!file.viewable}
+                  className={selected?.path === file.path ? "selected" : ""}
+                  onClick={() => void openFile(file.path)}
+                  title={file.viewable ? file.path : "File is above the safe viewer limit"}
+                >
+                  <BookOpen size={14} />
+                  <span>
+                    <strong>{file.path}</strong>
+                    <small>{file.language} · {fileSize(file.byte_size)}</small>
+                  </span>
+                </button>
+              ))}
+              {!files.length ? <p>No matching recovered source files.</p> : null}
+            </div>
+          </aside>
+          <section className="panel source-viewer">
+            {selected ? (
+              <>
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">{selected.language.toUpperCase()}</p>
+                    <h2>{selected.path}</h2>
+                  </div>
+                  <span className="factual-note">{fileSize(selected.byte_size)}</span>
+                </div>
+                <pre className="forensic-code-view source-code-view"><code>{selected.content}</code></pre>
+              </>
+            ) : (
+              <EmptyState
+                icon={BookOpen}
+                title="Choose a recovered source file"
+                message="Only text-source output under the configured safe size limit can be opened here."
+              />
+            )}
+          </section>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -1933,33 +2100,113 @@ function TriProofTab({ records }: { records: AIProposal[] }) {
   );
 }
 
-function IocTab({ detail }: { detail: CaseDetail }) {
+function ReputationPanel({ caseId }: { caseId: string }) {
+  const [data, setData] = useState<CaseReputation | null>(null);
+  const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const load = () => {
+    setError("");
+    api
+      .reputation(caseId)
+      .then((result) => setData(result))
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error ? cause.message : "Unable to load reputation status",
+        ),
+      );
+  };
+  useEffect(() => {
+    setData(null);
+    load();
+  }, [caseId]);
+  async function refresh() {
+    setRefreshing(true);
+    setError("");
+    try {
+      await api.refreshReputation(caseId);
+      load();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Reputation lookup failed",
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }
+  if (!data) return error ? <ErrorPanel error={error} retry={load} /> : <Loading />;
   return (
-    <div className="panel">
+    <section className="panel reputation-panel">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">NETWORK & INDICATORS</p>
-          <h2>Static-string observations</h2>
+          <p className="eyebrow">OPTIONAL HASH REPUTATION</p>
+          <h2>{data.provider.name}</h2>
         </div>
-        <span className="factual-note">Not runtime observed</span>
+        <StatusPill value={data.provider.status} />
       </div>
-      {detail.indicators.length === 0 ? (
-        <EmptyState
-          icon={Network}
-          title="No static network indicator was extracted"
-          message="Absence of a string indicator does not prove the APK makes no network requests."
-        />
-      ) : (
-        <div className="ioc-list">
-          {detail.indicators.map((item) => (
-            <div className="ioc-row" key={item.id}>
-              <StatusPill value={item.observable_level} />
-              <span className="ioc-type">{item.indicator_type}</span>
-              <code>{item.value}</code>
-            </div>
+      <p className="page-description">{data.boundary}</p>
+      <div className="source-workspace-actions">
+        <button
+          className="secondary-button"
+          disabled={data.provider.status !== "configured" || refreshing}
+          onClick={() => void refresh()}
+        >
+          {refreshing ? <LoaderCircle className="spin" size={16} /> : <Network size={16} />}
+          {refreshing ? "Checking reputation…" : "Refresh hash reputation"}
+        </button>
+        {data.provider.status !== "configured" && data.provider.remediation ? (
+          <span className="factual-note">{data.provider.remediation}</span>
+        ) : null}
+      </div>
+      {error ? <ErrorPanel error={error} retry={load} /> : null}
+      {data.observations.length ? (
+        <div className="reputation-observations">
+          {data.observations.map((observation) => (
+            <article key={observation.id}>
+              <StatusPill value={observation.status} />
+              <div>
+                <strong>{observation.provider} · {dateTime(observation.observed_at)}</strong>
+                <code>{JSON.stringify(observation.summary)}</code>
+              </div>
+            </article>
           ))}
         </div>
+      ) : (
+        <p className="empty-inline">No external reputation lookup has been requested for this sample.</p>
       )}
+    </section>
+  );
+}
+
+function IocTab({ detail }: { detail: CaseDetail }) {
+  return (
+    <div className="source-workspace">
+      <div className="panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">NETWORK & INDICATORS</p>
+            <h2>Static-string observations</h2>
+          </div>
+          <span className="factual-note">Not runtime observed</span>
+        </div>
+        {detail.indicators.length === 0 ? (
+          <EmptyState
+            icon={Network}
+            title="No static network indicator was extracted"
+            message="Absence of a string indicator does not prove the APK makes no network requests."
+          />
+        ) : (
+          <div className="ioc-list">
+            {detail.indicators.map((item) => (
+              <div className="ioc-row" key={item.id}>
+                <StatusPill value={item.observable_level} />
+                <span className="ioc-type">{item.indicator_type}</span>
+                <code>{item.value}</code>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <ReputationPanel caseId={detail.case.id} />
     </div>
   );
 }
@@ -2648,7 +2895,66 @@ function DiffGroup({
   );
 }
 
-function ComparePage() {
+function CorrelationPanel({ navigate }: { navigate: Navigate }) {
+  const [data, setData] = useState<IntelligenceCorrelations | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api
+      .correlations()
+      .then((result) => setData(result))
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Unable to load cross-case intelligence",
+        ),
+      );
+  }, []);
+  if (error) return <ErrorPanel error={error} />;
+  if (!data) return <Loading />;
+  return (
+    <section className="panel correlation-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">CROSS-CASE INTELLIGENCE</p>
+          <h2>Deterministic relationships</h2>
+        </div>
+        <span className="factual-note">No attribution</span>
+      </div>
+      <p className="page-description">{data.limitation}</p>
+      {!data.items.length ? (
+        <EmptyState
+          icon={Network}
+          title="No shared evidence yet"
+          message="Relationships appear when at least two investigations share an indicator, certificate blob, or static rule."
+        />
+      ) : (
+        <div className="correlation-list">
+          {data.items.map((item) => (
+            <article key={`${item.kind}:${item.value}`}>
+              <div>
+                <p className="eyebrow">{item.label} · {item.case_count} cases</p>
+                <code>{item.value}</code>
+              </div>
+              <div className="correlation-case-links">
+                {item.cases.map((caseItem) => (
+                  <button
+                    key={caseItem.id}
+                    onClick={() => navigate(`/app/cases/${caseItem.id}`)}
+                  >
+                    {caseItem.title}
+                  </button>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ComparePage({ navigate }: { navigate: Navigate }) {
   const [cases, setCases] = useState<CaseRecord[] | null>(null);
   const [left, setLeft] = useState("");
   const [right, setRight] = useState("");
@@ -2675,6 +2981,7 @@ function ComparePage() {
         title="Case comparison"
         description="Compare deterministic finding rules and static indicators without inferring family or actor attribution."
       />
+      <CorrelationPanel navigate={navigate} />
       {!cases ? (
         <Loading />
       ) : cases.length < 2 ? (
@@ -3407,7 +3714,7 @@ function Route({ path, navigate }: { path: string; navigate: Navigate }) {
   if (path === "/app/samples") return <SamplesPage navigate={navigate} />;
   if (path === "/app/graph") return <GlobalGraphPage />;
   if (path === "/app/indicators") return <IndicatorsPage navigate={navigate} />;
-  if (path === "/app/compare") return <ComparePage />;
+  if (path === "/app/compare") return <ComparePage navigate={navigate} />;
   if (path === "/app/reports") return <ReportsPage />;
   if (path === "/app/health") return <HealthPage />;
   if (path === "/app/settings") return <SettingsPage />;

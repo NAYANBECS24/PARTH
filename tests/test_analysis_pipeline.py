@@ -17,6 +17,7 @@ def run_isolated(script: str, tmp_path: Path) -> dict:
     environment["SHADOWPATH_AUTH_DISABLED"] = "false"
     environment["SHADOWPATH_ENABLE_NVIDIA"] = "false"
     environment["SHADOWPATH_DISABLE_MOBSF"] = "true"
+    environment["VIRUSTOTAL_API_KEY"] = ""
     completed = subprocess.run(
         [sys.executable, "-c", script],
         cwd=ROOT,
@@ -114,6 +115,72 @@ print(json.dumps(records))
     assert result["SP-APK-103"]["location"]["technique"]["id"] == "T1417.001"
     assert result["SP-APK-104"]["location"]["matched_permissions"] == ["android.permission.SEND_SMS"]
     assert result["SP-APK-107"]["location"]["confidence"] == "low"
+
+
+def test_source_workspace_and_cross_case_intelligence_are_bounded(tmp_path: Path) -> None:
+    result = run_isolated(
+        """
+import hashlib, json
+from pathlib import Path
+from backend.config import settings
+from backend.database import initialise_database
+from backend.intake import StoredUpload
+from backend.repository import add_artifact, add_finding, add_indicator, create_case_and_job
+from backend.api import intelligence_correlations
+from backend.source_workspace import JadxSourceWorkspace, SourceWorkspaceError
+from backend.threat_intel import ThreatIntelError, VirusTotalClient
+
+initialise_database()
+def case(name):
+    content = name.encode()
+    sha = hashlib.sha256(content).hexdigest()
+    path = settings.upload_dir / f'{sha}.apk'
+    path.write_bytes(content)
+    upload = StoredUpload(sha, len(content), f'{name}.apk', path, 1)
+    return create_case_and_job(upload, name, '', 'standard', False, False)[:2], sha
+
+(left, left_sha) = case('left')
+(right, right_sha) = case('right')
+left_case, left_job = left
+right_case, right_job = right
+for case_id, job_id in ((left_case, left_job), (right_case, right_job)):
+    artifact = add_artifact(case_id, job_id, 'indicator_observation', 'shared.example.test', 'dex-string:classes.dex', {'indicator_type': 'domain'})
+    add_indicator(case_id, job_id, 'domain', 'shared.example.test', artifact)
+    add_finding(case_id, job_id, 'SP-APK-101', 'Dynamic code-loading API referenced', 'dynamic_code_loading', 'medium', 'fixture', [artifact])
+
+root = settings.source_workspace_dir / left_sha / 'sources' / 'fixture'
+root.mkdir(parents=True, exist_ok=True)
+(root / 'Recovered.java').write_text('class Recovered { void inspect() {} }', encoding='utf-8')
+status = JadxSourceWorkspace.status(left_sha)
+content = JadxSourceWorkspace.read(left_sha, 'fixture/Recovered.java')
+blocked = False
+try:
+    JadxSourceWorkspace.read(left_sha, '../outside.java')
+except SourceWorkspaceError:
+    blocked = True
+vt_blocked = False
+try:
+    VirusTotalClient().lookup_file(left_sha)
+except ThreatIntelError:
+    vt_blocked = True
+relationships = intelligence_correlations(limit=60)
+print(json.dumps({
+    'generated': status['generated'],
+    'file_count': len(status['files']),
+    'content': content['content'],
+    'traversal_blocked': blocked,
+    'vt_blocked_without_key': vt_blocked,
+    'relationship_kinds': sorted({item['kind'] for item in relationships['items']}),
+}))
+""",
+        tmp_path,
+    )
+    assert result["generated"] is True
+    assert result["file_count"] == 1
+    assert "class Recovered" in result["content"]
+    assert result["traversal_blocked"] is True
+    assert result["vt_blocked_without_key"] is True
+    assert result["relationship_kinds"] == ["indicator", "rule"]
 
 
 def test_invalid_archive_is_rejected(tmp_path: Path) -> None:

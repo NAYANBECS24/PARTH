@@ -40,6 +40,11 @@ class Settings:
     mobsf_api_url: str | None
     mobsf_api_key: str | None
     mobsf_timeout_seconds: float
+    source_workspace_max_files: int
+    source_workspace_max_file_bytes: int
+    source_workspace_timeout_seconds: float
+    virustotal_api_key: str | None
+    virustotal_timeout_seconds: float
     max_upload_bytes: int
     max_archive_entries: int
     max_uncompressed_bytes: int
@@ -65,6 +70,10 @@ class Settings:
         return bool(self.mobsf_api_url and self.mobsf_api_key)
 
     @property
+    def virustotal_configured(self) -> bool:
+        return bool(self.virustotal_api_key)
+
+    @property
     def upload_dir(self) -> Path:
         return self.data_dir / "uploads"
 
@@ -76,8 +85,12 @@ class Settings:
     def capsule_dir(self) -> Path:
         return self.data_dir / "capsules"
 
+    @property
+    def source_workspace_dir(self) -> Path:
+        return self.data_dir / "source_workspace"
+
     def ensure_directories(self) -> None:
-        for directory in (self.data_dir, self.upload_dir, self.report_dir, self.capsule_dir):
+        for directory in (self.data_dir, self.upload_dir, self.report_dir, self.capsule_dir, self.source_workspace_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -117,6 +130,11 @@ def get_settings() -> Settings:
         mobsf_api_url=mobsf_api_url,
         mobsf_api_key=mobsf_api_key,
         mobsf_timeout_seconds=max(10.0, min(float(os.getenv("MOBSF_TIMEOUT_SECONDS", "180")), 600.0)),
+        source_workspace_max_files=max(50, min(int(os.getenv("SHADOWPATH_SOURCE_WORKSPACE_MAX_FILES", "1600")), 5000)),
+        source_workspace_max_file_bytes=max(32768, min(int(os.getenv("SHADOWPATH_SOURCE_WORKSPACE_MAX_FILE_BYTES", "393216")), 2097152)),
+        source_workspace_timeout_seconds=max(20.0, min(float(os.getenv("SHADOWPATH_SOURCE_WORKSPACE_TIMEOUT_SECONDS", "120")), 600.0)),
+        virustotal_api_key=os.getenv("VIRUSTOTAL_API_KEY", "").strip() or None,
+        virustotal_timeout_seconds=max(5.0, min(float(os.getenv("VIRUSTOTAL_TIMEOUT_SECONDS", "30")), 120.0)),
         max_upload_bytes=int(os.getenv("SHADOWPATH_MAX_UPLOAD_BYTES", "104857600")),
         max_archive_entries=int(os.getenv("SHADOWPATH_MAX_ARCHIVE_ENTRIES", "12000")),
         max_uncompressed_bytes=int(os.getenv("SHADOWPATH_MAX_UNCOMPRESSED_BYTES", "536870912")),

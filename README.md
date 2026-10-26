@@ -149,6 +149,19 @@ and the isolated-lab ADB client as ready. An attached emulator is intentionally 
 treated as a safe dynamic-analysis environment until it is isolated from the host and
 network.
 
+#### Source workspace and intelligence tools
+
+With JADX available, open any completed investigation and select **Source workspace**.
+Choose **Generate source workspace** to create a bounded, searchable local source view.
+It runs JADX only when an analyst requests it, never executes APK code, and limits file
+listing and viewing size. The **Comparisons** page also exposes deterministic cross-case
+relationships for shared indicators, signing-certificate blobs, and static rules.
+
+Optional hash-only reputation lookup can be enabled by setting `VIRUSTOTAL_API_KEY` in
+your private `.env`. It is disabled by default. A lookup occurs only when an analyst
+clicks **Refresh hash reputation** for a case; APK bytes and extracted IoCs are not sent
+by this integration.
+
 #### Optional isolated MobSF static cross-validation
 
 This starts MobSF only on the loopback interface, generates a private API key in the
